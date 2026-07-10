@@ -2,26 +2,34 @@ import Rfc4648
 
 /-- The base encodings this REPL can apply. -/
 inductive Encoding
-  | base16
-  | base32
   | base64
+  | base32
+  | base16
+  | base64url
+  | base32hex
 
 namespace Encoding
 
 def encode : Encoding → ByteArray → String
-  | .base16 => Rfc4648.Base16.encode
-  | .base32 => Rfc4648.Base32.encode
   | .base64 => Rfc4648.Base64.encode
+  | .base32 => Rfc4648.Base32.encode
+  | .base16 => Rfc4648.Base16.encode
+  | .base64url => Rfc4648.Base64.Url.encode
+  | .base32hex => Rfc4648.Base32.Hex.encode
 
 def decode? : Encoding → String → Option ByteArray
-  | .base16 => Rfc4648.Base16.decode?
-  | .base32 => Rfc4648.Base32.decode?
   | .base64 => Rfc4648.Base64.decode?
+  | .base32 => Rfc4648.Base32.decode?
+  | .base16 => Rfc4648.Base16.decode?
+  | .base64url => Rfc4648.Base64.Url.decode?
+  | .base32hex => Rfc4648.Base32.Hex.decode?
 
 def name : Encoding → String
-  | .base16 => "Base16"
-  | .base32 => "Base32"
   | .base64 => "Base64"
+  | .base32 => "Base32"
+  | .base16 => "Base16"
+  | .base64url => "Base64Url"
+  | .base32hex => "Base32Hex"
 
 /-- Parse the user's choice of encoding from a menu selection. -/
 def ofChoice? (s : String) : Option Encoding :=
@@ -29,6 +37,8 @@ def ofChoice? (s : String) : Option Encoding :=
   | "1" | "64" | "base64" | "" => some .base64
   | "2" | "32" | "base32" => some .base32
   | "3" | "16" | "base16" | "hex" => some .base16
+  | "4" | "64url" | "base64url" | "url" => some .base64url
+  | "5" | "32hex" | "base32hex" => some .base32hex
   | _ => none
 
 end Encoding
@@ -85,7 +95,8 @@ def main : IO Unit := do
   | none =>
     IO.eprintln s!"Unrecognized mode: {modeChoice.trimAscii}"
   | some mode =>
-    IO.println "Which encoding? [1] Base64 (default)  [2] Base32  [3] Base16"
+    IO.println "Which encoding? [1] Base64 (default)  [2] Base32  [3] Base16  \
+      [4] Base64Url  [5] Base32Hex"
     IO.print "> "
     let encChoice ← stdin.getLine
     match Encoding.ofChoice? encChoice with
