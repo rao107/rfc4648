@@ -479,4 +479,46 @@ theorem encode_decode? {s : String} {data : ByteArray}
 
 end RoundTrip
 
+/-! ## Output length
+
+Encoding `n` bytes yields `4 * ⌈n / 3⌉` characters (RFC 4648 §4: every
+3-byte group, including a padded final partial group, becomes 4
+characters), so valid encodings always have length divisible by 4. -/
+
+section Length
+
+/-- The encoding of `n` bytes has exactly `4 * ((n + 2) / 3)` characters. -/
+theorem length_encodeList : ∀ bs : List UInt8,
+    (encodeList bs).length = 4 * ((bs.length + 2) / 3)
+  | [] => rfl
+  | [_] => by simp [encodeList]
+  | [_, _] => by simp [encodeList]
+  | b0 :: b1 :: b2 :: rest => by
+    simp only [encodeList, List.length_cons, length_encodeList rest]
+    omega
+
+/-- Anything the strict decoder accepts has the padded encoding length of
+its output. -/
+theorem length_of_decodeList {cs : List Char} {bs : List UInt8}
+    (h : decodeList cs = some bs) : cs.length = 4 * ((bs.length + 2) / 3) := by
+  rw [← encodeList_decodeList h, length_encodeList]
+
+/-- Anything the strict decoder accepts has length divisible by 4. -/
+theorem length_of_decodeList_mod {cs : List Char} {bs : List UInt8}
+    (h : decodeList cs = some bs) : cs.length % 4 = 0 := by
+  rw [length_of_decodeList h]
+  omega
+
+/-- Encoding length, lifted to `ByteArray`/`String`. -/
+theorem length_encode (data : ByteArray) :
+    (encode data).length = 4 * ((data.size + 2) / 3) := by
+  rw [encode, String.length_ofList, length_encodeList, ByteArray.length_toList]
+
+/-- Decoding length, lifted to `ByteArray`/`String`. -/
+theorem length_of_decode? {s : String} {data : ByteArray}
+    (h : decode? s = some data) : s.length = 4 * ((data.size + 2) / 3) := by
+  rw [← encode_decode? h, length_encode]
+
+end Length
+
 end Rfc4648.Base64
