@@ -59,25 +59,31 @@ bijection between byte strings and canonical encodings. The RFC 4648 §10
 test vectors (and a set of malformed-input rejections) are checked at
 compile time with `#guard`.
 
-All proofs use only Lean's standard axioms (`propext`,
-`Classical.choice`, `Quot.sound`) — no `sorry`, no extra axioms, no
-`native_decide`.
+There are no `sorry`s. Besides Lean's standard axioms (`propext`,
+`Classical.choice`, `Quot.sound`), proofs that use `bv_decide` depend on
+per-theorem `…._native.bv_decide.ax_*` axioms: the SAT solver's
+unsatisfiability certificate is checked by a verified checker that runs
+as compiled native code, so these proofs trust the Lean compiler in
+addition to the kernel. The character-map lemmas avoid this and are
+kernel-checked by plain `decide`.
 
 ## Proof approach
 
-- Finite bit-manipulation facts (e.g. reassembling a byte from its 6-bit
-  pieces) are kernel-checked by `decide`. Since core Lean has no
-  `Decidable` instance for `∀ v : UInt8, P v`, `Rfc4648/Util.lean`
-  provides bridges through bounded `Nat` quantifiers
-  (`Nat.decidableBallLT`), with bounds chosen to keep enumeration small
-  (≤ 4096 cases).
+- The codecs are parameterized over an `Alphabet size` structure
+  (`Rfc4648/Alphabet.lean`) bundling the character maps with the three
+  facts the proofs need. Round-trip, canonicity, and length are proved
+  once per bit-width family; §5 base64url and §7 base32hex are just
+  different `Alphabet` values applied to the same theorems.
+- Bit-manipulation facts (e.g. reassembling a byte from its 6-bit
+  pieces) are discharged by `bv_decide`, stated directly over full
+  `UInt8`s with `<` hypotheses where needed — no case enumeration.
 - Character-map inverses (`ofChar?_eq_some`) are proved by case analysis
-  over the alphabet ranges, since `Char` cannot be enumerated.
+  over the alphabet ranges, since `Char` cannot be enumerated; the
+  forward direction uses `decide` via a bounded-`Nat` bridge in
+  `Rfc4648/Util.lean` (`Nat.decidableBallLT`).
 - The main theorems are structural inductions over encoding groups
   (3 bytes ↔ 4 chars for base64, 5 ↔ 8 for base32, 1 ↔ 2 for base16),
   with one branch per padding shape.
-- The URL/hex variants reuse all bit-level lemmas from their parent
-  codec; only the character maps and their lemmas differ.
 
 ## Building
 

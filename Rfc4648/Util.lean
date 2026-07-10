@@ -3,11 +3,11 @@
 
 Two kinds of glue that core Lean does not provide:
 
-* `decide`-friendly bridges for universally quantified facts about `UInt8`.
-  There is no `Decidable` instance for `∀ v : UInt8, P v`, so we reduce to a
-  bounded quantifier over `Nat`, which `Nat.decidableBallLT` makes decidable.
-  Bounded variants keep the enumeration small (e.g. 16·16 instead of 256²
-  cases for facts about 4-bit values).
+* A `decide`-friendly bridge for universally quantified facts about
+  `UInt8` (used for the character-map lemmas, which `bv_decide` cannot
+  handle because they involve `Char`). There is no `Decidable` instance
+  for `∀ v : UInt8, P v`, so we reduce to a bounded quantifier over
+  `Nat`, which `Nat.decidableBallLT` makes decidable.
 
 * `ByteArray.toList` lemmas relating it to `Array.toList`, needed to lift
   list-level codec theorems to the `ByteArray`/`String` wrappers.
@@ -29,24 +29,6 @@ by `decide`. -/
 theorem uint8_all {P : UInt8 → Prop}
     (h : ∀ n : Nat, n < 256 → P (UInt8.ofNat n)) : ∀ v : UInt8, P v :=
   fun v => uint8_all_lt h v v.toNat_lt_size
-
-/-- Two-variable version of `uint8_all_lt`: `b₁ · b₂` cases, which keeps
-`decide` fast when both bounds are small. -/
-theorem uint8_all_lt₂ {b₁ b₂ : Nat} {P : UInt8 → UInt8 → Prop}
-    (h : ∀ m : Nat, m < b₁ → ∀ n : Nat, n < b₂ →
-      P (UInt8.ofNat m) (UInt8.ofNat n)) :
-    ∀ x y : UInt8, x.toNat < b₁ → y.toNat < b₂ → P x y := fun x y hx hy => by
-  have hp := h x.toNat hx y.toNat hy
-  rwa [UInt8.ofNat_toNat, UInt8.ofNat_toNat] at hp
-
-/-- Three-variable version of `uint8_all_lt`. -/
-theorem uint8_all_lt₃ {b₁ b₂ b₃ : Nat} {P : UInt8 → UInt8 → UInt8 → Prop}
-    (h : ∀ m : Nat, m < b₁ → ∀ n : Nat, n < b₂ → ∀ k : Nat, k < b₃ →
-      P (UInt8.ofNat m) (UInt8.ofNat n) (UInt8.ofNat k)) :
-    ∀ x y z : UInt8, x.toNat < b₁ → y.toNat < b₂ → z.toNat < b₃ →
-      P x y z := fun x y z hx hy hz => by
-  have hp := h x.toNat hx y.toNat hy z.toNat hz
-  rwa [UInt8.ofNat_toNat, UInt8.ofNat_toNat, UInt8.ofNat_toNat] at hp
 
 private theorem byteArray_toList_loop (bs : ByteArray) (i : Nat) (r : List UInt8) :
     ByteArray.toList.loop bs i r = r.reverse ++ bs.data.toList.drop i := by

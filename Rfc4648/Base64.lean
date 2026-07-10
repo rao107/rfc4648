@@ -1,21 +1,30 @@
+import Std.Tactic.BVDecide
 import Rfc4648.Util
+import Rfc4648.Alphabet
 
 /-!
-# RFC 4648 §4 — Base 64 Encoding
+# RFC 4648 §4 / §5 — Base 64 Encodings
 
-Encoder and strict decoder for base64.
+Encoder and strict decoder for base64, parameterized over an
+`Alphabet 64`. Two alphabets are provided: `Base64.alphabet` (§4,
+`+`/`/`) and `Base64.Url.alphabet` (§5, `-`/`_`, URL and filename safe).
+The codec and all its theorems are proved once, generically.
 
 The core functions `encodeList` and `decodeList` operate on `List UInt8` /
-`List Char` by structural recursion over 3-byte / 4-character groups, which
-keeps them easy to reason about in proofs. `encode` and `decode?` are the
-user-facing wrappers over `ByteArray` and `String`.
+`List Char` by structural recursion over 3-byte / 4-character groups.
+`encode` and `decode?` are the user-facing wrappers over `ByteArray` and
+`String`.
 
 The decoder is strict in the sense of RFC 4648 §3.5 and §12: it rejects
-characters outside the alphabet, misplaced or missing padding, and non-zero
-pad bits. Consequently `decode?` accepts exactly the outputs of `encode`.
+characters outside the alphabet, misplaced or missing padding, and
+non-zero pad bits. Consequently `decode?` accepts exactly the outputs of
+`encode`. Padding is always required, even for the §5 alphabet (which
+some protocols use unpadded).
 -/
 
 namespace Rfc4648.Base64
+
+/-! ## The §4 alphabet -/
 
 /-- Map a 6-bit value (`0`–`63`) to its character in the base64 alphabet
 (RFC 4648 Table 1): `A`–`Z`, `a`–`z`, `0`–`9`, `+`, `/`. -/
@@ -36,43 +45,157 @@ def ofChar? (c : Char) : Option UInt8 :=
   else if c = '/' then some 63
   else none
 
+section CharLemmas
+
+set_option maxRecDepth 4096
+
+theorem ofChar?_toChar : ∀ v : UInt8, v < 64 → ofChar? (toChar v) = some v :=
+  uint8_all (by decide)
+
+theorem toChar_ne_pad : ∀ v : UInt8, v < 64 → toChar v ≠ '=' :=
+  uint8_all (by decide)
+
+theorem ofChar?_eq_some {c : Char} {v : UInt8} (h : ofChar? c = some v) :
+    v < 64 ∧ toChar v = c := by
+  unfold ofChar? at h
+  split at h
+  case isTrue hAZ =>
+    obtain ⟨hA, hZ⟩ := hAZ
+    have hA' : 65 ≤ c.toNat := hA
+    have hZ' : c.toNat ≤ 90 := hZ
+    injection h with hv
+    subst hv
+    have eA : 'A'.toNat = 65 := rfl
+    have hle : UInt8.ofNat 65 ≤ UInt8.ofNat c.toNat := by
+      rw [UInt8.le_iff_toNat_le, UInt8.toNat_ofNat', UInt8.toNat_ofNat']
+      omega
+    have hval : (c.toNat.toUInt8 - 'A'.toNat.toUInt8).toNat = c.toNat - 65 := by
+      simp only [Nat.toUInt8_eq, eA, UInt8.toNat_sub_of_le _ _ hle, UInt8.toNat_ofNat']
+      omega
+    refine ⟨by rw [UInt8.lt_iff_toNat_lt, hval]; show c.toNat - 65 < 64; omega, ?_⟩
+    unfold toChar
+    rw [if_pos (show _ < (26 : UInt8) by
+      rw [UInt8.lt_iff_toNat_lt, hval]; show c.toNat - 65 < 26; omega)]
+    rw [hval, show 'A'.toNat + (c.toNat - 65) = c.toNat by
+      show 65 + (c.toNat - 65) = c.toNat; omega]
+    exact Char.ofNat_toNat c
+  case isFalse =>
+    split at h
+    case isTrue haz =>
+      obtain ⟨ha, hz⟩ := haz
+      have ha' : 97 ≤ c.toNat := ha
+      have hz' : c.toNat ≤ 122 := hz
+      injection h with hv
+      subst hv
+      have ea : 'a'.toNat = 97 := rfl
+      have hle : UInt8.ofNat 97 ≤ UInt8.ofNat c.toNat := by
+        rw [UInt8.le_iff_toNat_le, UInt8.toNat_ofNat', UInt8.toNat_ofNat']
+        omega
+      have hval : (c.toNat.toUInt8 - 'a'.toNat.toUInt8 + 26).toNat = c.toNat - 71 := by
+        simp only [Nat.toUInt8_eq, ea, UInt8.toNat_add, UInt8.toNat_sub_of_le _ _ hle,
+          UInt8.toNat_ofNat', UInt8.toNat_ofNat]
+        omega
+      refine ⟨by rw [UInt8.lt_iff_toNat_lt, hval]; show c.toNat - 71 < 64; omega, ?_⟩
+      unfold toChar
+      rw [if_neg (show ¬(_ < (26 : UInt8)) by
+        rw [UInt8.lt_iff_toNat_lt, hval]; show ¬(c.toNat - 71 < 26); omega)]
+      rw [if_pos (show _ < (52 : UInt8) by
+        rw [UInt8.lt_iff_toNat_lt, hval]; show c.toNat - 71 < 52; omega)]
+      rw [hval, show 'a'.toNat + (c.toNat - 71 - 26) = c.toNat by
+        show 97 + (c.toNat - 71 - 26) = c.toNat; omega]
+      exact Char.ofNat_toNat c
+    case isFalse =>
+      split at h
+      case isTrue h09 =>
+        obtain ⟨h0, h9⟩ := h09
+        have h0' : 48 ≤ c.toNat := h0
+        have h9' : c.toNat ≤ 57 := h9
+        injection h with hv
+        subst hv
+        have e0 : '0'.toNat = 48 := rfl
+        have hle : UInt8.ofNat 48 ≤ UInt8.ofNat c.toNat := by
+          rw [UInt8.le_iff_toNat_le, UInt8.toNat_ofNat', UInt8.toNat_ofNat']
+          omega
+        have hval : (c.toNat.toUInt8 - '0'.toNat.toUInt8 + 52).toNat = c.toNat + 4 := by
+          simp only [Nat.toUInt8_eq, e0, UInt8.toNat_add, UInt8.toNat_sub_of_le _ _ hle,
+            UInt8.toNat_ofNat', UInt8.toNat_ofNat]
+          omega
+        refine ⟨by rw [UInt8.lt_iff_toNat_lt, hval]; show c.toNat + 4 < 64; omega, ?_⟩
+        unfold toChar
+        rw [if_neg (show ¬(_ < (26 : UInt8)) by
+          rw [UInt8.lt_iff_toNat_lt, hval]; show ¬(c.toNat + 4 < 26); omega)]
+        rw [if_neg (show ¬(_ < (52 : UInt8)) by
+          rw [UInt8.lt_iff_toNat_lt, hval]; show ¬(c.toNat + 4 < 52); omega)]
+        rw [if_pos (show _ < (62 : UInt8) by
+          rw [UInt8.lt_iff_toNat_lt, hval]; show c.toNat + 4 < 62; omega)]
+        rw [hval, show '0'.toNat + (c.toNat + 4 - 52) = c.toNat by
+          show 48 + (c.toNat + 4 - 52) = c.toNat; omega]
+        exact Char.ofNat_toNat c
+      case isFalse =>
+        split at h
+        case isTrue hplus =>
+          injection h with hv
+          subst hv
+          subst hplus
+          exact ⟨by decide, by decide⟩
+        case isFalse =>
+          split at h
+          case isTrue hslash =>
+            injection h with hv
+            subst hv
+            subst hslash
+            exact ⟨by decide, by decide⟩
+          case isFalse => simp at h
+
+end CharLemmas
+
+/-- The base64 alphabet of RFC 4648 §4 (Table 1). -/
+def alphabet : Alphabet 64 where
+  toChar := toChar
+  ofChar? := ofChar?
+  ofChar?_toChar := ofChar?_toChar
+  toChar_ne_pad := toChar_ne_pad
+  ofChar?_eq_some := ofChar?_eq_some
+
+/-! ## The codec, parameterized over the alphabet -/
+
 /-- Encode bytes as base64 characters, processing one 24-bit group
 (3 bytes → 4 characters) per step. A final group of 1 or 2 bytes is
 zero-padded to a whole number of 6-bit values and the output filled to
 4 characters with `=` (RFC 4648 §4). -/
-def encodeList : List UInt8 → List Char
+def encodeList (α : Alphabet 64) : List UInt8 → List Char
   | [] => []
   | [b0] =>
-    [toChar (b0 >>> 2),
-     toChar ((b0 &&& 0x03) <<< 4),
+    [α.toChar (b0 >>> 2),
+     α.toChar ((b0 &&& 0x03) <<< 4),
      '=', '=']
   | [b0, b1] =>
-    [toChar (b0 >>> 2),
-     toChar (((b0 &&& 0x03) <<< 4) ||| (b1 >>> 4)),
-     toChar ((b1 &&& 0x0F) <<< 2),
+    [α.toChar (b0 >>> 2),
+     α.toChar (((b0 &&& 0x03) <<< 4) ||| (b1 >>> 4)),
+     α.toChar ((b1 &&& 0x0F) <<< 2),
      '=']
   | b0 :: b1 :: b2 :: rest =>
-    toChar (b0 >>> 2) ::
-    toChar (((b0 &&& 0x03) <<< 4) ||| (b1 >>> 4)) ::
-    toChar (((b1 &&& 0x0F) <<< 2) ||| (b2 >>> 6)) ::
-    toChar (b2 &&& 0x3F) ::
-    encodeList rest
+    α.toChar (b0 >>> 2) ::
+    α.toChar (((b0 &&& 0x03) <<< 4) ||| (b1 >>> 4)) ::
+    α.toChar (((b1 &&& 0x0F) <<< 2) ||| (b2 >>> 6)) ::
+    α.toChar (b2 &&& 0x3F) ::
+    encodeList α rest
 
 /-- Strictly decode base64 characters, one 4-character group per step.
 Returns `none` unless the input is a canonical encoding: length a multiple
 of 4, padding only in the final group, and all pad bits zero. -/
-def decodeList : List Char → Option (List UInt8)
+def decodeList (α : Alphabet 64) : List Char → Option (List UInt8)
   | [] => some []
   | c0 :: c1 :: c2 :: c3 :: rest => do
-    let v0 ← ofChar? c0
-    let v1 ← ofChar? c1
+    let v0 ← α.ofChar? c0
+    let v1 ← α.ofChar? c1
     if c2 = '=' then
       -- "xx==": one output byte; the low 4 bits of v1 are pad bits.
       if c3 = '=' ∧ rest = [] ∧ v1 &&& 0x0F = 0 then
         some [(v0 <<< 2) ||| (v1 >>> 4)]
       else none
     else do
-      let v2 ← ofChar? c2
+      let v2 ← α.ofChar? c2
       if c3 = '=' then
         -- "xxx=": two output bytes; the low 2 bits of v2 are pad bits.
         if rest = [] ∧ v2 &&& 0x03 = 0 then
@@ -80,8 +203,8 @@ def decodeList : List Char → Option (List UInt8)
                 (v1 <<< 4) ||| (v2 >>> 2)]
         else none
       else do
-        let v3 ← ofChar? c3
-        let tail ← decodeList rest
+        let v3 ← α.ofChar? c3
+        let tail ← decodeList α rest
         some (((v0 <<< 2) ||| (v1 >>> 4)) ::
               ((v1 <<< 4) ||| (v2 >>> 2)) ::
               ((v2 <<< 6) ||| v3) ::
@@ -90,12 +213,12 @@ def decodeList : List Char → Option (List UInt8)
 
 /-- Encode a byte array as a base64 string (RFC 4648 §4, with padding). -/
 def encode (data : ByteArray) : String :=
-  String.ofList (encodeList data.toList)
+  String.ofList (encodeList alphabet data.toList)
 
 /-- Strictly decode a base64 string. Returns `none` if the input is not a
 canonical RFC 4648 §4 encoding. -/
 def decode? (s : String) : Option ByteArray :=
-  (decodeList s.toList).map fun bytes => ByteArray.mk bytes.toArray
+  (decodeList alphabet s.toList).map fun bytes => ByteArray.mk bytes.toArray
 
 /-! ## Test vectors (RFC 4648 §10), checked at compile time -/
 
@@ -127,291 +250,82 @@ def decode? (s : String) : Option ByteArray :=
 
 /-! ## Round-trip and canonicity
 
-Same statements as `Rfc4648.Base16`: strict decoding inverts encoding, and
-the decoder accepts exactly the canonical encodings. -/
+`decodeList_encodeList` / `decode?_encode`: decoding an encoding gives back
+the input. `encodeList_decodeList` / `encode_decode?`: anything the strict
+decoder accepts is the encoding of its output. The list-level theorems
+hold for any `Alphabet 64`. -/
 
 section RoundTrip
 
-set_option maxRecDepth 4096
-set_option maxHeartbeats 1000000
+/-! Bounds on the 6-bit values produced by the encoder, for feeding the
+alphabet lemmas. -/
 
-/-! Bounds on the 6-bit pieces produced by the encoder (`decide`, ≤ 256
-cases each via `uint8_all`). -/
+private theorem v0_lt (b0 : UInt8) : b0 >>> 2 < 64 := by bv_decide
 
-private theorem shr2_lt64 : ∀ b : UInt8, (b >>> 2).toNat < 64 :=
-  uint8_all (by decide)
+private theorem v1_lt (b0 b1 : UInt8) :
+    ((b0 &&& 0x03) <<< 4) ||| (b1 >>> 4) < 64 := by bv_decide
 
-private theorem shr4_lt16 : ∀ b : UInt8, (b >>> 4).toNat < 16 :=
-  uint8_all (by decide)
+private theorem v1p_lt (b0 : UInt8) : (b0 &&& 0x03) <<< 4 < 64 := by bv_decide
 
-private theorem shr4_lt64 : ∀ b : UInt8, (b >>> 4).toNat < 64 :=
-  uint8_all (by decide)
+private theorem v2_lt (b1 b2 : UInt8) :
+    ((b1 &&& 0x0F) <<< 2) ||| (b2 >>> 6) < 64 := by bv_decide
 
-private theorem shr6_lt4 : ∀ b : UInt8, (b >>> 6).toNat < 4 :=
-  uint8_all (by decide)
+private theorem v2p_lt (b1 : UInt8) : (b1 &&& 0x0F) <<< 2 < 64 := by bv_decide
 
-private theorem shr6_lt64 : ∀ b : UInt8, (b >>> 6).toNat < 64 :=
-  uint8_all (by decide)
-
-private theorem and3_lt4 : ∀ b : UInt8, (b &&& 0x03).toNat < 4 :=
-  uint8_all (by decide)
-
-private theorem and3_shl4_lt64 : ∀ b : UInt8, ((b &&& 0x03) <<< 4).toNat < 64 :=
-  uint8_all (by decide)
-
-private theorem and15_lt16 : ∀ b : UInt8, (b &&& 0x0F).toNat < 16 :=
-  uint8_all (by decide)
-
-private theorem and15_lt64 : ∀ b : UInt8, (b &&& 0x0F).toNat < 64 :=
-  uint8_all (by decide)
-
-private theorem and15_shl2_lt64 : ∀ b : UInt8, ((b &&& 0x0F) <<< 2).toNat < 64 :=
-  uint8_all (by decide)
-
-private theorem and63_lt64 : ∀ b : UInt8, (b &&& 0x3F).toNat < 64 :=
-  uint8_all (by decide)
-
-private theorem or_lt64 : ∀ x y : UInt8, x.toNat < 64 → y.toNat < 64 →
-    (x ||| y).toNat < 64 :=
-  uint8_all_lt₂ (by decide)
-
-/-! Bounds on pieces of decoded 6-bit values. -/
-
-private theorem shr4_lt4_of_lt64 : ∀ v : UInt8, v.toNat < 64 → (v >>> 4).toNat < 4 :=
-  uint8_all (by decide)
-
-private theorem shr2_lt16_of_lt64 : ∀ v : UInt8, v.toNat < 64 → (v >>> 2).toNat < 16 :=
-  uint8_all (by decide)
-
-/-! Splitting a byte and reassembling it (`decide`, 256 cases each). -/
-
-private theorem recombine2 : ∀ b : UInt8, ((b >>> 2) <<< 2) ||| (b &&& 0x03) = b :=
-  uint8_all (by decide)
-
-private theorem recombine4 : ∀ b : UInt8, ((b >>> 4) <<< 4) ||| (b &&& 0x0F) = b :=
-  uint8_all (by decide)
-
-private theorem recombine6 : ∀ b : UInt8, ((b >>> 6) <<< 6) ||| (b &&& 0x3F) = b :=
-  uint8_all (by decide)
-
-private theorem unshift4_and3 : ∀ b : UInt8, ((b &&& 0x03) <<< 4) >>> 4 = b &&& 0x03 :=
-  uint8_all (by decide)
-
-private theorem unshift2_and15 : ∀ b : UInt8, ((b &&& 0x0F) <<< 2) >>> 2 = b &&& 0x0F :=
-  uint8_all (by decide)
-
-/-! The pad bits of a final partial group are zero. -/
-
-private theorem pad_bits4 : ∀ b : UInt8, ((b &&& 0x03) <<< 4) &&& 0x0F = 0 :=
-  uint8_all (by decide)
-
-private theorem pad_bits2 : ∀ b : UInt8, ((b &&& 0x0F) <<< 2) &&& 0x03 = 0 :=
-  uint8_all (by decide)
-
-/-! Zero pad bits can be shifted out and back. -/
-
-private theorem pad4_cancel : ∀ v : UInt8, v.toNat < 64 → v &&& 0x0F = 0 →
-    (v >>> 4) <<< 4 = v :=
-  uint8_all (by decide)
-
-private theorem pad2_cancel : ∀ v : UInt8, v.toNat < 64 → v &&& 0x03 = 0 →
-    (v >>> 2) <<< 2 = v :=
-  uint8_all (by decide)
-
-/-! Extracting one summand from a disjoint `|||` (`decide`, ≤ 4096 bounded
-cases each via `uint8_all_lt₂`). -/
-
-private theorem or_shr4 : ∀ x y : UInt8, x.toNat < 4 → y.toNat < 16 →
-    ((x <<< 4) ||| y) >>> 4 = x :=
-  uint8_all_lt₂ (by decide)
-
-private theorem or_shl4 : ∀ x y : UInt8, x.toNat < 4 → y.toNat < 16 →
-    ((x <<< 4) ||| y) <<< 4 = y <<< 4 :=
-  uint8_all_lt₂ (by decide)
-
-private theorem or_shr2 : ∀ x y : UInt8, x.toNat < 64 → y.toNat < 4 →
-    ((x <<< 2) ||| y) >>> 2 = x :=
-  uint8_all_lt₂ (by decide)
-
-private theorem or_and3 : ∀ x y : UInt8, x.toNat < 64 → y.toNat < 4 →
-    ((x <<< 2) ||| y) &&& 0x03 = y :=
-  uint8_all_lt₂ (by decide)
-
-private theorem or_shl6 : ∀ x y : UInt8, x.toNat < 16 → y.toNat < 4 →
-    ((x <<< 2) ||| y) <<< 6 = y <<< 6 :=
-  uint8_all_lt₂ (by decide)
-
-private theorem or_shr4_and15 : ∀ x y : UInt8, x.toNat < 64 → y.toNat < 16 →
-    ((x <<< 4) ||| y) >>> 4 = x &&& 0x0F :=
-  uint8_all_lt₂ (by decide)
-
-private theorem or_and15 : ∀ x y : UInt8, x.toNat < 64 → y.toNat < 16 →
-    ((x <<< 4) ||| y) &&& 0x0F = y :=
-  uint8_all_lt₂ (by decide)
-
-private theorem or_shr6_and3 : ∀ x y : UInt8, x.toNat < 64 → y.toNat < 64 →
-    ((x <<< 6) ||| y) >>> 6 = x &&& 0x03 :=
-  uint8_all_lt₂ (by decide)
-
-private theorem or_and63 : ∀ x y : UInt8, x.toNat < 64 → y.toNat < 64 →
-    ((x <<< 6) ||| y) &&& 0x3F = y :=
-  uint8_all_lt₂ (by decide)
-
-/-! Character-map lemmas. -/
-
-/-- `ofChar?` is a left inverse of `toChar` on 6-bit values. -/
-theorem ofChar?_toChar : ∀ v : UInt8, v.toNat < 64 → ofChar? (toChar v) = some v :=
-  uint8_all (by decide)
-
-private theorem toChar_ne_pad : ∀ v : UInt8, v.toNat < 64 → toChar v ≠ '=' :=
-  uint8_all (by decide)
-
-/-- Characters accepted by `ofChar?` decode to 6-bit values, and `toChar`
-maps those values back to the same character. -/
-theorem ofChar?_eq_some {c : Char} {v : UInt8} (h : ofChar? c = some v) :
-    v.toNat < 64 ∧ toChar v = c := by
-  unfold ofChar? at h
-  split at h
-  case isTrue hAZ =>
-    obtain ⟨hA, hZ⟩ := hAZ
-    have hA' : 65 ≤ c.toNat := hA
-    have hZ' : c.toNat ≤ 90 := hZ
-    injection h with hv
-    subst hv
-    have eA : 'A'.toNat = 65 := rfl
-    have hle : UInt8.ofNat 65 ≤ UInt8.ofNat c.toNat := by
-      rw [UInt8.le_iff_toNat_le, UInt8.toNat_ofNat', UInt8.toNat_ofNat']
-      omega
-    have hval : (c.toNat.toUInt8 - 'A'.toNat.toUInt8).toNat = c.toNat - 65 := by
-      simp only [Nat.toUInt8_eq, eA, UInt8.toNat_sub_of_le _ _ hle, UInt8.toNat_ofNat']
-      omega
-    refine ⟨by omega, ?_⟩
-    unfold toChar
-    rw [if_pos (show _ < (26 : UInt8) by
-      rw [UInt8.lt_iff_toNat_lt, hval]; show c.toNat - 65 < 26; omega)]
-    rw [hval, show 'A'.toNat + (c.toNat - 65) = c.toNat by
-      show 65 + (c.toNat - 65) = c.toNat; omega]
-    exact Char.ofNat_toNat c
-  case isFalse =>
-    split at h
-    case isTrue haz =>
-      obtain ⟨ha, hz⟩ := haz
-      have ha' : 97 ≤ c.toNat := ha
-      have hz' : c.toNat ≤ 122 := hz
-      injection h with hv
-      subst hv
-      have ea : 'a'.toNat = 97 := rfl
-      have hle : UInt8.ofNat 97 ≤ UInt8.ofNat c.toNat := by
-        rw [UInt8.le_iff_toNat_le, UInt8.toNat_ofNat', UInt8.toNat_ofNat']
-        omega
-      have hval : (c.toNat.toUInt8 - 'a'.toNat.toUInt8 + 26).toNat = c.toNat - 71 := by
-        simp only [Nat.toUInt8_eq, ea, UInt8.toNat_add, UInt8.toNat_sub_of_le _ _ hle,
-          UInt8.toNat_ofNat', UInt8.toNat_ofNat]
-        omega
-      refine ⟨by omega, ?_⟩
-      unfold toChar
-      rw [if_neg (show ¬(_ < (26 : UInt8)) by
-        rw [UInt8.lt_iff_toNat_lt, hval]; show ¬(c.toNat - 71 < 26); omega)]
-      rw [if_pos (show _ < (52 : UInt8) by
-        rw [UInt8.lt_iff_toNat_lt, hval]; show c.toNat - 71 < 52; omega)]
-      rw [hval, show 'a'.toNat + (c.toNat - 71 - 26) = c.toNat by
-        show 97 + (c.toNat - 71 - 26) = c.toNat; omega]
-      exact Char.ofNat_toNat c
-    case isFalse =>
-      split at h
-      case isTrue h09 =>
-        obtain ⟨h0, h9⟩ := h09
-        have h0' : 48 ≤ c.toNat := h0
-        have h9' : c.toNat ≤ 57 := h9
-        injection h with hv
-        subst hv
-        have e0 : '0'.toNat = 48 := rfl
-        have hle : UInt8.ofNat 48 ≤ UInt8.ofNat c.toNat := by
-          rw [UInt8.le_iff_toNat_le, UInt8.toNat_ofNat', UInt8.toNat_ofNat']
-          omega
-        have hval : (c.toNat.toUInt8 - '0'.toNat.toUInt8 + 52).toNat = c.toNat + 4 := by
-          simp only [Nat.toUInt8_eq, e0, UInt8.toNat_add, UInt8.toNat_sub_of_le _ _ hle,
-            UInt8.toNat_ofNat', UInt8.toNat_ofNat]
-          omega
-        refine ⟨by omega, ?_⟩
-        unfold toChar
-        rw [if_neg (show ¬(_ < (26 : UInt8)) by
-          rw [UInt8.lt_iff_toNat_lt, hval]; show ¬(c.toNat + 4 < 26); omega)]
-        rw [if_neg (show ¬(_ < (52 : UInt8)) by
-          rw [UInt8.lt_iff_toNat_lt, hval]; show ¬(c.toNat + 4 < 52); omega)]
-        rw [if_pos (show _ < (62 : UInt8) by
-          rw [UInt8.lt_iff_toNat_lt, hval]; show c.toNat + 4 < 62; omega)]
-        rw [hval, show '0'.toNat + (c.toNat + 4 - 52) = c.toNat by
-          show 48 + (c.toNat + 4 - 52) = c.toNat; omega]
-        exact Char.ofNat_toNat c
-      case isFalse =>
-        split at h
-        case isTrue hplus =>
-          injection h with hv
-          subst hv
-          subst hplus
-          exact ⟨by decide, by decide⟩
-        case isFalse =>
-          split at h
-          case isTrue hslash =>
-            injection h with hv
-            subst hv
-            subst hslash
-            exact ⟨by decide, by decide⟩
-          case isFalse => simp at h
-
-/-! Main theorems. -/
+private theorem v3_lt (b2 : UInt8) : b2 &&& 0x3F < 64 := by bv_decide
 
 /-- Round-trip: strictly decoding an encoding yields the original bytes. -/
-theorem decodeList_encodeList : ∀ bs : List UInt8,
-    decodeList (encodeList bs) = some bs
+theorem decodeList_encodeList (α : Alphabet 64) : ∀ bs : List UInt8,
+    decodeList α (encodeList α bs) = some bs
   | [] => rfl
   | [b0] => by
     simp only [encodeList, decodeList,
-      ofChar?_toChar _ (shr2_lt64 b0), ofChar?_toChar _ (and3_shl4_lt64 b0),
+      α.ofChar?_toChar _ (v0_lt b0), α.ofChar?_toChar _ (v1p_lt b0),
       Option.bind_eq_bind, Option.bind_some]
-    rw [if_pos trivial, if_pos ⟨trivial, trivial, pad_bits4 b0⟩,
-      unshift4_and3 b0, recombine2 b0]
+    rw [if_pos trivial, if_pos ⟨trivial, trivial, by bv_decide⟩]
+    have e0 : ((b0 >>> 2) <<< 2) ||| (((b0 &&& 0x03) <<< 4) >>> 4) = b0 := by
+      bv_decide
+    rw [e0]
   | [b0, b1] => by
-    have h1 : (((b0 &&& 0x03) <<< 4) ||| (b1 >>> 4)).toNat < 64 :=
-      or_lt64 _ _ (and3_shl4_lt64 b0) (shr4_lt64 b1)
     simp only [encodeList, decodeList,
-      ofChar?_toChar _ (shr2_lt64 b0), ofChar?_toChar _ h1,
-      ofChar?_toChar _ (and15_shl2_lt64 b1),
+      α.ofChar?_toChar _ (v0_lt b0), α.ofChar?_toChar _ (v1_lt b0 b1),
+      α.ofChar?_toChar _ (v2p_lt b1),
       Option.bind_eq_bind, Option.bind_some]
-    rw [if_neg (toChar_ne_pad _ (and15_shl2_lt64 b1)),
-      if_pos trivial, if_pos ⟨trivial, pad_bits2 b1⟩,
-      or_shr4 _ _ (and3_lt4 b0) (shr4_lt16 b1), recombine2 b0,
-      or_shl4 _ _ (and3_lt4 b0) (shr4_lt16 b1),
-      unshift2_and15 b1, recombine4 b1]
+    rw [if_neg (α.toChar_ne_pad _ (v2p_lt b1)), if_pos trivial,
+      if_pos ⟨trivial, by bv_decide⟩]
+    have e0 : ((b0 >>> 2) <<< 2) |||
+        ((((b0 &&& 0x03) <<< 4) ||| (b1 >>> 4)) >>> 4) = b0 := by bv_decide
+    have e1 : ((((b0 &&& 0x03) <<< 4) ||| (b1 >>> 4)) <<< 4) |||
+        (((b1 &&& 0x0F) <<< 2) >>> 2) = b1 := by bv_decide
+    rw [e0, e1]
   | b0 :: b1 :: b2 :: rest => by
-    have h1 : (((b0 &&& 0x03) <<< 4) ||| (b1 >>> 4)).toNat < 64 :=
-      or_lt64 _ _ (and3_shl4_lt64 b0) (shr4_lt64 b1)
-    have h2 : (((b1 &&& 0x0F) <<< 2) ||| (b2 >>> 6)).toNat < 64 :=
-      or_lt64 _ _ (and15_shl2_lt64 b1) (shr6_lt64 b2)
     simp only [encodeList, decodeList,
-      ofChar?_toChar _ (shr2_lt64 b0), ofChar?_toChar _ h1,
-      ofChar?_toChar _ h2, ofChar?_toChar _ (and63_lt64 b2),
+      α.ofChar?_toChar _ (v0_lt b0), α.ofChar?_toChar _ (v1_lt b0 b1),
+      α.ofChar?_toChar _ (v2_lt b1 b2), α.ofChar?_toChar _ (v3_lt b2),
       Option.bind_eq_bind, Option.bind_some,
-      decodeList_encodeList rest]
-    rw [if_neg (toChar_ne_pad _ h2), if_neg (toChar_ne_pad _ (and63_lt64 b2)),
-      or_shr4 _ _ (and3_lt4 b0) (shr4_lt16 b1), recombine2 b0,
-      or_shl4 _ _ (and3_lt4 b0) (shr4_lt16 b1),
-      or_shr2 _ _ (and15_lt64 b1) (shr6_lt4 b2), recombine4 b1,
-      or_shl6 _ _ (and15_lt16 b1) (shr6_lt4 b2), recombine6 b2]
+      decodeList_encodeList α rest]
+    rw [if_neg (α.toChar_ne_pad _ (v2_lt b1 b2)),
+      if_neg (α.toChar_ne_pad _ (v3_lt b2))]
+    have e0 : ((b0 >>> 2) <<< 2) |||
+        ((((b0 &&& 0x03) <<< 4) ||| (b1 >>> 4)) >>> 4) = b0 := by bv_decide
+    have e1 : ((((b0 &&& 0x03) <<< 4) ||| (b1 >>> 4)) <<< 4) |||
+        ((((b1 &&& 0x0F) <<< 2) ||| (b2 >>> 6)) >>> 2) = b1 := by bv_decide
+    have e2 : ((((b1 &&& 0x0F) <<< 2) ||| (b2 >>> 6)) <<< 6) |||
+        (b2 &&& 0x3F) = b2 := by bv_decide
+    rw [e0, e1, e2]
 
 /-- Canonicity: every string the strict decoder accepts is the encoding of
 the bytes it returns. -/
-theorem encodeList_decodeList : ∀ {cs : List Char} {bs : List UInt8},
-    decodeList cs = some bs → encodeList bs = cs
+theorem encodeList_decodeList (α : Alphabet 64) : ∀ {cs : List Char} {bs : List UInt8},
+    decodeList α cs = some bs → encodeList α bs = cs
   | [], _, h => by
     simp only [decodeList, Option.some.injEq] at h
     simp [← h, encodeList]
   | _c0 :: _c1 :: c2 :: c3 :: rest, bs, h => by
     simp only [decodeList, Option.bind_eq_bind, Option.bind_eq_some_iff] at h
     obtain ⟨v0, hv0, v1, hv1, h⟩ := h
-    obtain ⟨hlt0, hc0⟩ := ofChar?_eq_some hv0
-    obtain ⟨hlt1, hc1⟩ := ofChar?_eq_some hv1
+    obtain ⟨hlt0, hc0⟩ := α.ofChar?_eq_some hv0
+    obtain ⟨hlt1, hc1⟩ := α.ofChar?_eq_some hv1
     split at h
     case isTrue hc2 =>
       split at h
@@ -420,15 +334,15 @@ theorem encodeList_decodeList : ∀ {cs : List Char} {bs : List UInt8},
         injection h with h
         subst h
         subst hc2 hc3 hrest
+        have e0 : ((v0 <<< 2) ||| (v1 >>> 4)) >>> 2 = v0 := by bv_decide
+        have e1 : (((v0 <<< 2) ||| (v1 >>> 4)) &&& 0x03) <<< 4 = v1 := by bv_decide
         simp only [encodeList]
-        rw [or_shr2 v0 (v1 >>> 4) hlt0 (shr4_lt4_of_lt64 v1 hlt1),
-          or_and3 v0 (v1 >>> 4) hlt0 (shr4_lt4_of_lt64 v1 hlt1),
-          pad4_cancel v1 hlt1 hpad, hc0, hc1]
+        rw [e0, e1, hc0, hc1]
       case isFalse => simp at h
     case isFalse hc2 =>
       simp only [Option.bind_eq_some_iff] at h
       obtain ⟨v2, hv2, h⟩ := h
-      obtain ⟨hlt2, hc2'⟩ := ofChar?_eq_some hv2
+      obtain ⟨hlt2, hc2'⟩ := α.ofChar?_eq_some hv2
       split at h
       case isTrue hc3 =>
         split at h
@@ -437,28 +351,27 @@ theorem encodeList_decodeList : ∀ {cs : List Char} {bs : List UInt8},
           injection h with h
           subst h
           subst hc3 hrest
+          have e0 : ((v0 <<< 2) ||| (v1 >>> 4)) >>> 2 = v0 := by bv_decide
+          have e1 : ((((v0 <<< 2) ||| (v1 >>> 4)) &&& 0x03) <<< 4) |||
+              (((v1 <<< 4) ||| (v2 >>> 2)) >>> 4) = v1 := by bv_decide
+          have e2 : (((v1 <<< 4) ||| (v2 >>> 2)) &&& 0x0F) <<< 2 = v2 := by
+            bv_decide
           simp only [encodeList]
-          rw [or_shr2 v0 (v1 >>> 4) hlt0 (shr4_lt4_of_lt64 v1 hlt1),
-            or_and3 v0 (v1 >>> 4) hlt0 (shr4_lt4_of_lt64 v1 hlt1),
-            or_shr4_and15 v1 (v2 >>> 2) hlt1 (shr2_lt16_of_lt64 v2 hlt2),
-            recombine4 v1,
-            or_and15 v1 (v2 >>> 2) hlt1 (shr2_lt16_of_lt64 v2 hlt2),
-            pad2_cancel v2 hlt2 hpad, hc0, hc1, hc2']
+          rw [e0, e1, e2, hc0, hc1, hc2']
         case isFalse => simp at h
       case isFalse hc3 =>
         simp only [Option.bind_eq_some_iff, Option.some.injEq] at h
         obtain ⟨v3, hv3, tail, htail, hbs⟩ := h
-        obtain ⟨hlt3, hc3'⟩ := ofChar?_eq_some hv3
+        obtain ⟨hlt3, hc3'⟩ := α.ofChar?_eq_some hv3
         subst hbs
+        have e0 : ((v0 <<< 2) ||| (v1 >>> 4)) >>> 2 = v0 := by bv_decide
+        have e1 : ((((v0 <<< 2) ||| (v1 >>> 4)) &&& 0x03) <<< 4) |||
+            (((v1 <<< 4) ||| (v2 >>> 2)) >>> 4) = v1 := by bv_decide
+        have e2 : ((((v1 <<< 4) ||| (v2 >>> 2)) &&& 0x0F) <<< 2) |||
+            (((v2 <<< 6) ||| v3) >>> 6) = v2 := by bv_decide
+        have e3 : ((v2 <<< 6) ||| v3) &&& 0x3F = v3 := by bv_decide
         simp only [encodeList]
-        rw [or_shr2 v0 (v1 >>> 4) hlt0 (shr4_lt4_of_lt64 v1 hlt1),
-          or_and3 v0 (v1 >>> 4) hlt0 (shr4_lt4_of_lt64 v1 hlt1),
-          or_shr4_and15 v1 (v2 >>> 2) hlt1 (shr2_lt16_of_lt64 v2 hlt2),
-          recombine4 v1,
-          or_and15 v1 (v2 >>> 2) hlt1 (shr2_lt16_of_lt64 v2 hlt2),
-          or_shr6_and3 v2 v3 hlt2 hlt3, recombine2 v2,
-          or_and63 v2 v3 hlt2 hlt3,
-          encodeList_decodeList htail, hc0, hc1, hc2', hc3']
+        rw [e0, e1, e2, e3, encodeList_decodeList α htail, hc0, hc1, hc2', hc3']
   | [_], _, h => by simp [decodeList] at h
   | [_, _], _, h => by simp [decodeList] at h
   | [_, _, _], _, h => by simp [decodeList] at h
@@ -475,37 +388,33 @@ theorem encode_decode? {s : String} {data : ByteArray}
   obtain ⟨l, hl, hdata⟩ := h
   subst hdata
   simp only [encode, ByteArray.toList_mk]
-  rw [encodeList_decodeList hl, String.ofList_toList]
+  rw [encodeList_decodeList alphabet hl, String.ofList_toList]
 
 end RoundTrip
 
-/-! ## Output length
-
-Encoding `n` bytes yields `4 * ⌈n / 3⌉` characters (RFC 4648 §4: every
-3-byte group, including a padded final partial group, becomes 4
-characters), so valid encodings always have length divisible by 4. -/
+/-! ## Output length -/
 
 section Length
 
 /-- The encoding of `n` bytes has exactly `4 * ((n + 2) / 3)` characters. -/
-theorem length_encodeList : ∀ bs : List UInt8,
-    (encodeList bs).length = 4 * ((bs.length + 2) / 3)
+theorem length_encodeList (α : Alphabet 64) : ∀ bs : List UInt8,
+    (encodeList α bs).length = 4 * ((bs.length + 2) / 3)
   | [] => rfl
   | [_] => by simp [encodeList]
   | [_, _] => by simp [encodeList]
   | b0 :: b1 :: b2 :: rest => by
-    simp only [encodeList, List.length_cons, length_encodeList rest]
+    simp only [encodeList, List.length_cons, length_encodeList α rest]
     omega
 
 /-- Anything the strict decoder accepts has the padded encoding length of
 its output. -/
-theorem length_of_decodeList {cs : List Char} {bs : List UInt8}
-    (h : decodeList cs = some bs) : cs.length = 4 * ((bs.length + 2) / 3) := by
-  rw [← encodeList_decodeList h, length_encodeList]
+theorem length_of_decodeList {α : Alphabet 64} {cs : List Char} {bs : List UInt8}
+    (h : decodeList α cs = some bs) : cs.length = 4 * ((bs.length + 2) / 3) := by
+  rw [← encodeList_decodeList α h, length_encodeList]
 
 /-- Anything the strict decoder accepts has length divisible by 4. -/
-theorem length_of_decodeList_mod {cs : List Char} {bs : List UInt8}
-    (h : decodeList cs = some bs) : cs.length % 4 = 0 := by
+theorem length_of_decodeList_mod {α : Alphabet 64} {cs : List Char} {bs : List UInt8}
+    (h : decodeList α cs = some bs) : cs.length % 4 = 0 := by
   rw [length_of_decodeList h]
   omega
 
@@ -523,11 +432,10 @@ end Length
 
 /-! ## RFC 4648 §5 — Base 64 with URL and filename safe alphabet
 
-Identical to base64 except that value 62 maps to `-` and 63 to `_`.
-Padding is retained: although §5 permits omitting it in some contexts,
-the canonical form keeps `=`, and the strict decoder here requires it.
-All bit-level lemmas are shared with the §4 codec; only the character
-maps and their three lemmas differ. -/
+The same verified codec applied to the §5 alphabet: value 62 maps to `-`
+and 63 to `_`. Padding is retained: although §5 permits omitting it in
+some contexts, the canonical form keeps `=`, and the strict decoder here
+requires it. -/
 
 namespace Url
 
@@ -550,92 +458,18 @@ def ofChar? (c : Char) : Option UInt8 :=
   else if c = '_' then some 63
   else none
 
-/-- Encode bytes as base64url characters (RFC 4648 §5). Same grouping as
-`Base64.encodeList`. -/
-def encodeList : List UInt8 → List Char
-  | [] => []
-  | [b0] =>
-    [toChar (b0 >>> 2),
-     toChar ((b0 &&& 0x03) <<< 4),
-     '=', '=']
-  | [b0, b1] =>
-    [toChar (b0 >>> 2),
-     toChar (((b0 &&& 0x03) <<< 4) ||| (b1 >>> 4)),
-     toChar ((b1 &&& 0x0F) <<< 2),
-     '=']
-  | b0 :: b1 :: b2 :: rest =>
-    toChar (b0 >>> 2) ::
-    toChar (((b0 &&& 0x03) <<< 4) ||| (b1 >>> 4)) ::
-    toChar (((b1 &&& 0x0F) <<< 2) ||| (b2 >>> 6)) ::
-    toChar (b2 &&& 0x3F) ::
-    encodeList rest
-
-/-- Strictly decode base64url characters. Same structure as
-`Base64.decodeList`. -/
-def decodeList : List Char → Option (List UInt8)
-  | [] => some []
-  | c0 :: c1 :: c2 :: c3 :: rest => do
-    let v0 ← ofChar? c0
-    let v1 ← ofChar? c1
-    if c2 = '=' then
-      if c3 = '=' ∧ rest = [] ∧ v1 &&& 0x0F = 0 then
-        some [(v0 <<< 2) ||| (v1 >>> 4)]
-      else none
-    else do
-      let v2 ← ofChar? c2
-      if c3 = '=' then
-        if rest = [] ∧ v2 &&& 0x03 = 0 then
-          some [(v0 <<< 2) ||| (v1 >>> 4),
-                (v1 <<< 4) ||| (v2 >>> 2)]
-        else none
-      else do
-        let v3 ← ofChar? c3
-        let tail ← decodeList rest
-        some (((v0 <<< 2) ||| (v1 >>> 4)) ::
-              ((v1 <<< 4) ||| (v2 >>> 2)) ::
-              ((v2 <<< 6) ||| v3) ::
-              tail)
-  | _ => none
-
-/-- Encode a byte array as a base64url string (RFC 4648 §5, with padding). -/
-def encode (data : ByteArray) : String :=
-  String.ofList (encodeList data.toList)
-
-/-- Strictly decode a base64url string. Returns `none` if the input is not
-a canonical RFC 4648 §5 encoding (including if padding is omitted). -/
-def decode? (s : String) : Option ByteArray :=
-  (decodeList s.toList).map fun bytes => ByteArray.mk bytes.toArray
-
-#guard encode "".toUTF8 = ""
-#guard encode "fooba".toUTF8 = "Zm9vYmE="
-#guard encode "foobar".toUTF8 = "Zm9vYmFy"
-#guard encode (ByteArray.mk #[0xFB, 0xEF]) = "--8="
-#guard encode (ByteArray.mk #[0xFF, 0xFF, 0xFF]) = "____"
-
-#guard (decode? "--8=").map ByteArray.toList = some [0xFB, 0xEF]
-#guard (decode? "____").map ByteArray.toList = some [0xFF, 0xFF, 0xFF]
-#guard (decode? "Zm9vYmFy").map ByteArray.toList = some "foobar".toUTF8.toList
-
-#guard (decode? "++8=").isNone   -- §4 alphabet is rejected
-#guard (decode? "//8=").isNone
-#guard (decode? "Zg").isNone     -- omitted padding is rejected
-
-section RoundTrip
+section CharLemmas
 
 set_option maxRecDepth 4096
-set_option maxHeartbeats 1000000
 
-/-- `ofChar?` is a left inverse of `toChar` on 6-bit values. -/
-theorem ofChar?_toChar : ∀ v : UInt8, v.toNat < 64 → ofChar? (toChar v) = some v :=
+theorem ofChar?_toChar : ∀ v : UInt8, v < 64 → ofChar? (toChar v) = some v :=
   uint8_all (by decide)
 
-private theorem toChar_ne_pad : ∀ v : UInt8, v.toNat < 64 → toChar v ≠ '=' :=
+theorem toChar_ne_pad : ∀ v : UInt8, v < 64 → toChar v ≠ '=' :=
   uint8_all (by decide)
 
-/-- Characters accepted by `ofChar?` decode to 6-bit values, and `toChar`
-maps those values back to the same character. -/
 theorem ofChar?_eq_some {c : Char} {v : UInt8} (h : ofChar? c = some v) :
-    v.toNat < 64 ∧ toChar v = c := by
+    v < 64 ∧ toChar v = c := by
   unfold ofChar? at h
   split at h
   case isTrue hAZ =>
@@ -651,7 +485,7 @@ theorem ofChar?_eq_some {c : Char} {v : UInt8} (h : ofChar? c = some v) :
     have hval : (c.toNat.toUInt8 - 'A'.toNat.toUInt8).toNat = c.toNat - 65 := by
       simp only [Nat.toUInt8_eq, eA, UInt8.toNat_sub_of_le _ _ hle, UInt8.toNat_ofNat']
       omega
-    refine ⟨by omega, ?_⟩
+    refine ⟨by rw [UInt8.lt_iff_toNat_lt, hval]; show c.toNat - 65 < 64; omega, ?_⟩
     unfold toChar
     rw [if_pos (show _ < (26 : UInt8) by
       rw [UInt8.lt_iff_toNat_lt, hval]; show c.toNat - 65 < 26; omega)]
@@ -674,7 +508,7 @@ theorem ofChar?_eq_some {c : Char} {v : UInt8} (h : ofChar? c = some v) :
         simp only [Nat.toUInt8_eq, ea, UInt8.toNat_add, UInt8.toNat_sub_of_le _ _ hle,
           UInt8.toNat_ofNat', UInt8.toNat_ofNat]
         omega
-      refine ⟨by omega, ?_⟩
+      refine ⟨by rw [UInt8.lt_iff_toNat_lt, hval]; show c.toNat - 71 < 64; omega, ?_⟩
       unfold toChar
       rw [if_neg (show ¬(_ < (26 : UInt8)) by
         rw [UInt8.lt_iff_toNat_lt, hval]; show ¬(c.toNat - 71 < 26); omega)]
@@ -699,7 +533,7 @@ theorem ofChar?_eq_some {c : Char} {v : UInt8} (h : ofChar? c = some v) :
           simp only [Nat.toUInt8_eq, e0, UInt8.toNat_add, UInt8.toNat_sub_of_le _ _ hle,
             UInt8.toNat_ofNat', UInt8.toNat_ofNat]
           omega
-        refine ⟨by omega, ?_⟩
+        refine ⟨by rw [UInt8.lt_iff_toNat_lt, hval]; show c.toNat + 4 < 64; omega, ?_⟩
         unfold toChar
         rw [if_neg (show ¬(_ < (26 : UInt8)) by
           rw [UInt8.lt_iff_toNat_lt, hval]; show ¬(c.toNat + 4 < 26); omega)]
@@ -726,106 +560,38 @@ theorem ofChar?_eq_some {c : Char} {v : UInt8} (h : ofChar? c = some v) :
             exact ⟨by decide, by decide⟩
           case isFalse => simp at h
 
-/-- Round-trip: strictly decoding an encoding yields the original bytes. -/
-theorem decodeList_encodeList : ∀ bs : List UInt8,
-    decodeList (encodeList bs) = some bs
-  | [] => rfl
-  | [b0] => by
-    simp only [encodeList, decodeList,
-      ofChar?_toChar _ (shr2_lt64 b0), ofChar?_toChar _ (and3_shl4_lt64 b0),
-      Option.bind_eq_bind, Option.bind_some]
-    rw [if_pos trivial, if_pos ⟨trivial, trivial, pad_bits4 b0⟩,
-      unshift4_and3 b0, recombine2 b0]
-  | [b0, b1] => by
-    have h1 : (((b0 &&& 0x03) <<< 4) ||| (b1 >>> 4)).toNat < 64 :=
-      or_lt64 _ _ (and3_shl4_lt64 b0) (shr4_lt64 b1)
-    simp only [encodeList, decodeList,
-      ofChar?_toChar _ (shr2_lt64 b0), ofChar?_toChar _ h1,
-      ofChar?_toChar _ (and15_shl2_lt64 b1),
-      Option.bind_eq_bind, Option.bind_some]
-    rw [if_neg (toChar_ne_pad _ (and15_shl2_lt64 b1)),
-      if_pos trivial, if_pos ⟨trivial, pad_bits2 b1⟩,
-      or_shr4 _ _ (and3_lt4 b0) (shr4_lt16 b1), recombine2 b0,
-      or_shl4 _ _ (and3_lt4 b0) (shr4_lt16 b1),
-      unshift2_and15 b1, recombine4 b1]
-  | b0 :: b1 :: b2 :: rest => by
-    have h1 : (((b0 &&& 0x03) <<< 4) ||| (b1 >>> 4)).toNat < 64 :=
-      or_lt64 _ _ (and3_shl4_lt64 b0) (shr4_lt64 b1)
-    have h2 : (((b1 &&& 0x0F) <<< 2) ||| (b2 >>> 6)).toNat < 64 :=
-      or_lt64 _ _ (and15_shl2_lt64 b1) (shr6_lt64 b2)
-    simp only [encodeList, decodeList,
-      ofChar?_toChar _ (shr2_lt64 b0), ofChar?_toChar _ h1,
-      ofChar?_toChar _ h2, ofChar?_toChar _ (and63_lt64 b2),
-      Option.bind_eq_bind, Option.bind_some,
-      decodeList_encodeList rest]
-    rw [if_neg (toChar_ne_pad _ h2), if_neg (toChar_ne_pad _ (and63_lt64 b2)),
-      or_shr4 _ _ (and3_lt4 b0) (shr4_lt16 b1), recombine2 b0,
-      or_shl4 _ _ (and3_lt4 b0) (shr4_lt16 b1),
-      or_shr2 _ _ (and15_lt64 b1) (shr6_lt4 b2), recombine4 b1,
-      or_shl6 _ _ (and15_lt16 b1) (shr6_lt4 b2), recombine6 b2]
+end CharLemmas
 
-/-- Canonicity: every string the strict decoder accepts is the encoding of
-the bytes it returns. -/
-theorem encodeList_decodeList : ∀ {cs : List Char} {bs : List UInt8},
-    decodeList cs = some bs → encodeList bs = cs
-  | [], _, h => by
-    simp only [decodeList, Option.some.injEq] at h
-    simp [← h, encodeList]
-  | _c0 :: _c1 :: c2 :: c3 :: rest, bs, h => by
-    simp only [decodeList, Option.bind_eq_bind, Option.bind_eq_some_iff] at h
-    obtain ⟨v0, hv0, v1, hv1, h⟩ := h
-    obtain ⟨hlt0, hc0⟩ := ofChar?_eq_some hv0
-    obtain ⟨hlt1, hc1⟩ := ofChar?_eq_some hv1
-    split at h
-    case isTrue hc2 =>
-      split at h
-      case isTrue hcond =>
-        obtain ⟨hc3, hrest, hpad⟩ := hcond
-        injection h with h
-        subst h
-        subst hc2 hc3 hrest
-        simp only [encodeList]
-        rw [or_shr2 v0 (v1 >>> 4) hlt0 (shr4_lt4_of_lt64 v1 hlt1),
-          or_and3 v0 (v1 >>> 4) hlt0 (shr4_lt4_of_lt64 v1 hlt1),
-          pad4_cancel v1 hlt1 hpad, hc0, hc1]
-      case isFalse => simp at h
-    case isFalse hc2 =>
-      simp only [Option.bind_eq_some_iff] at h
-      obtain ⟨v2, hv2, h⟩ := h
-      obtain ⟨hlt2, hc2'⟩ := ofChar?_eq_some hv2
-      split at h
-      case isTrue hc3 =>
-        split at h
-        case isTrue hcond =>
-          obtain ⟨hrest, hpad⟩ := hcond
-          injection h with h
-          subst h
-          subst hc3 hrest
-          simp only [encodeList]
-          rw [or_shr2 v0 (v1 >>> 4) hlt0 (shr4_lt4_of_lt64 v1 hlt1),
-            or_and3 v0 (v1 >>> 4) hlt0 (shr4_lt4_of_lt64 v1 hlt1),
-            or_shr4_and15 v1 (v2 >>> 2) hlt1 (shr2_lt16_of_lt64 v2 hlt2),
-            recombine4 v1,
-            or_and15 v1 (v2 >>> 2) hlt1 (shr2_lt16_of_lt64 v2 hlt2),
-            pad2_cancel v2 hlt2 hpad, hc0, hc1, hc2']
-        case isFalse => simp at h
-      case isFalse hc3 =>
-        simp only [Option.bind_eq_some_iff, Option.some.injEq] at h
-        obtain ⟨v3, hv3, tail, htail, hbs⟩ := h
-        obtain ⟨hlt3, hc3'⟩ := ofChar?_eq_some hv3
-        subst hbs
-        simp only [encodeList]
-        rw [or_shr2 v0 (v1 >>> 4) hlt0 (shr4_lt4_of_lt64 v1 hlt1),
-          or_and3 v0 (v1 >>> 4) hlt0 (shr4_lt4_of_lt64 v1 hlt1),
-          or_shr4_and15 v1 (v2 >>> 2) hlt1 (shr2_lt16_of_lt64 v2 hlt2),
-          recombine4 v1,
-          or_and15 v1 (v2 >>> 2) hlt1 (shr2_lt16_of_lt64 v2 hlt2),
-          or_shr6_and3 v2 v3 hlt2 hlt3, recombine2 v2,
-          or_and63 v2 v3 hlt2 hlt3,
-          encodeList_decodeList htail, hc0, hc1, hc2', hc3']
-  | [_], _, h => by simp [decodeList] at h
-  | [_, _], _, h => by simp [decodeList] at h
-  | [_, _, _], _, h => by simp [decodeList] at h
+/-- The base64url alphabet of RFC 4648 §5 (Table 2). -/
+def alphabet : Alphabet 64 where
+  toChar := toChar
+  ofChar? := ofChar?
+  ofChar?_toChar := ofChar?_toChar
+  toChar_ne_pad := toChar_ne_pad
+  ofChar?_eq_some := ofChar?_eq_some
+
+/-- Encode a byte array as a base64url string (RFC 4648 §5, with padding). -/
+def encode (data : ByteArray) : String :=
+  String.ofList (encodeList alphabet data.toList)
+
+/-- Strictly decode a base64url string. Returns `none` if the input is not
+a canonical RFC 4648 §5 encoding (including if padding is omitted). -/
+def decode? (s : String) : Option ByteArray :=
+  (decodeList alphabet s.toList).map fun bytes => ByteArray.mk bytes.toArray
+
+#guard encode "".toUTF8 = ""
+#guard encode "fooba".toUTF8 = "Zm9vYmE="
+#guard encode "foobar".toUTF8 = "Zm9vYmFy"
+#guard encode (ByteArray.mk #[0xFB, 0xEF]) = "--8="
+#guard encode (ByteArray.mk #[0xFF, 0xFF, 0xFF]) = "____"
+
+#guard (decode? "--8=").map ByteArray.toList = some [0xFB, 0xEF]
+#guard (decode? "____").map ByteArray.toList = some [0xFF, 0xFF, 0xFF]
+#guard (decode? "Zm9vYmFy").map ByteArray.toList = some "foobar".toUTF8.toList
+
+#guard (decode? "++8=").isNone   -- §4 alphabet is rejected
+#guard (decode? "//8=").isNone
+#guard (decode? "Zg").isNone     -- omitted padding is rejected
 
 /-- Round-trip, lifted to `ByteArray`/`String`. -/
 theorem decode?_encode (data : ByteArray) : decode? (encode data) = some data := by
@@ -839,33 +605,7 @@ theorem encode_decode? {s : String} {data : ByteArray}
   obtain ⟨l, hl, hdata⟩ := h
   subst hdata
   simp only [encode, ByteArray.toList_mk]
-  rw [encodeList_decodeList hl, String.ofList_toList]
-
-end RoundTrip
-
-section Length
-
-/-- The encoding of `n` bytes has exactly `4 * ((n + 2) / 3)` characters. -/
-theorem length_encodeList : ∀ bs : List UInt8,
-    (encodeList bs).length = 4 * ((bs.length + 2) / 3)
-  | [] => rfl
-  | [_] => by simp [encodeList]
-  | [_, _] => by simp [encodeList]
-  | b0 :: b1 :: b2 :: rest => by
-    simp only [encodeList, List.length_cons, length_encodeList rest]
-    omega
-
-/-- Anything the strict decoder accepts has the padded encoding length of
-its output. -/
-theorem length_of_decodeList {cs : List Char} {bs : List UInt8}
-    (h : decodeList cs = some bs) : cs.length = 4 * ((bs.length + 2) / 3) := by
-  rw [← encodeList_decodeList h, length_encodeList]
-
-/-- Anything the strict decoder accepts has length divisible by 4. -/
-theorem length_of_decodeList_mod {cs : List Char} {bs : List UInt8}
-    (h : decodeList cs = some bs) : cs.length % 4 = 0 := by
-  rw [length_of_decodeList h]
-  omega
+  rw [encodeList_decodeList alphabet hl, String.ofList_toList]
 
 /-- Encoding length, lifted to `ByteArray`/`String`. -/
 theorem length_encode (data : ByteArray) :
@@ -876,8 +616,6 @@ theorem length_encode (data : ByteArray) :
 theorem length_of_decode? {s : String} {data : ByteArray}
     (h : decode? s = some data) : s.length = 4 * ((data.size + 2) / 3) := by
   rw [← encode_decode? h, length_encode]
-
-end Length
 
 end Url
 
