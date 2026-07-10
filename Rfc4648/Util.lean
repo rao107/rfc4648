@@ -75,4 +75,12 @@ theorem ByteArray.mk_toList_toArray (bs : ByteArray) :
     ByteArray.mk bs.toList.toArray = bs := by
   rw [ByteArray.toList_eq_data_toList]
 
+theorem ByteArray.length_toList (bs : ByteArray) : bs.toList.length = bs.size := by
+  rw [ByteArray.toList_eq_data_toList]
+  exact Array.length_toList
+
+theorem ByteArray.size_mk_toArray (l : List UInt8) :
+    (ByteArray.mk l.toArray).size = l.length := by
+  rw [← ByteArray.length_toList, ByteArray.toList_mk]
+
 end Rfc4648
