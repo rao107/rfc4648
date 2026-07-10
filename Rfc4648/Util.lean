@@ -39,6 +39,15 @@ theorem uint8_all_lt₂ {b₁ b₂ : Nat} {P : UInt8 → UInt8 → Prop}
   have hp := h x.toNat hx y.toNat hy
   rwa [UInt8.ofNat_toNat, UInt8.ofNat_toNat] at hp
 
+/-- Three-variable version of `uint8_all_lt`. -/
+theorem uint8_all_lt₃ {b₁ b₂ b₃ : Nat} {P : UInt8 → UInt8 → UInt8 → Prop}
+    (h : ∀ m : Nat, m < b₁ → ∀ n : Nat, n < b₂ → ∀ k : Nat, k < b₃ →
+      P (UInt8.ofNat m) (UInt8.ofNat n) (UInt8.ofNat k)) :
+    ∀ x y z : UInt8, x.toNat < b₁ → y.toNat < b₂ → z.toNat < b₃ →
+      P x y z := fun x y z hx hy hz => by
+  have hp := h x.toNat hx y.toNat hy z.toNat hz
+  rwa [UInt8.ofNat_toNat, UInt8.ofNat_toNat, UInt8.ofNat_toNat] at hp
+
 private theorem byteArray_toList_loop (bs : ByteArray) (i : Nat) (r : List UInt8) :
     ByteArray.toList.loop bs i r = r.reverse ++ bs.data.toList.drop i := by
   fun_induction ByteArray.toList.loop bs i r with
