@@ -8,3 +8,7 @@ name = "Rfc4648"
 [[lean_exe]]
 name = "rfc4648"
 root = "Main"
+
+[[lean_exe]]
+name = "bench"
+root = "Bench"

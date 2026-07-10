@@ -84,7 +84,22 @@ All proofs use only Lean's standard axioms (`propext`,
 ```sh
 lake build          # builds the library and runs all compile-time checks
 lake exe rfc4648    # runs Main.lean
+lake exe bench      # times encode/decode for all five alphabets (~40s)
 ```
+
+## Benchmark
+
+`Bench.lean` times `encode` and `decode?` for each alphabet over
+random inputs from 16 B to 1 MiB, reporting per-call time and
+throughput for the fastest of five trials. On one desktop core, encoding
+runs at roughly 40–50 MiB/s for base32/base64 and 25–35 MiB/s for
+base16; decoding is about a third slower. Throughput sags at the largest
+sizes, where the intermediate `List Char`/`List UInt8` that each codec
+builds costs more than the byte-shuffling itself.
+
+Run it compiled, as above: `encodeList` and `decodeList` recurse once per
+byte, and the interpreter (`lean --run`) overflows its stack well before
+1 MiB.
 
 Toolchain: `leanprover/lean4:v4.31.0` (see `lean-toolchain`). CI runs
 `lake build` via [lean-action](https://github.com/leanprover/lean-action).
