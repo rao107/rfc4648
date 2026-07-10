@@ -1,0 +1,10 @@
+name = "rfc4648"
+version = "0.1.0"
+defaultTargets = ["rfc4648"]
+
+[[lean_lib]]
+name = "Rfc4648"
+
+[[lean_exe]]
+name = "rfc4648"
+root = "Main"
