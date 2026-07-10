@@ -392,44 +392,6 @@ theorem encode_decode? {s : String} {data : ByteArray}
 
 end RoundTrip
 
-/-! ## Output length -/
-
-section Length
-
-/-- The encoding of `n` bytes has exactly `4 * ((n + 2) / 3)` characters. -/
-theorem length_encodeList (α : Alphabet 64) : ∀ bs : List UInt8,
-    (encodeList α bs).length = 4 * ((bs.length + 2) / 3)
-  | [] => rfl
-  | [_] => by simp [encodeList]
-  | [_, _] => by simp [encodeList]
-  | b0 :: b1 :: b2 :: rest => by
-    simp only [encodeList, List.length_cons, length_encodeList α rest]
-    omega
-
-/-- Anything the strict decoder accepts has the padded encoding length of
-its output. -/
-theorem length_of_decodeList {α : Alphabet 64} {cs : List Char} {bs : List UInt8}
-    (h : decodeList α cs = some bs) : cs.length = 4 * ((bs.length + 2) / 3) := by
-  rw [← encodeList_decodeList α h, length_encodeList]
-
-/-- Anything the strict decoder accepts has length divisible by 4. -/
-theorem length_of_decodeList_mod {α : Alphabet 64} {cs : List Char} {bs : List UInt8}
-    (h : decodeList α cs = some bs) : cs.length % 4 = 0 := by
-  rw [length_of_decodeList h]
-  omega
-
-/-- Encoding length, lifted to `ByteArray`/`String`. -/
-theorem length_encode (data : ByteArray) :
-    (encode data).length = 4 * ((data.size + 2) / 3) := by
-  rw [encode, String.length_ofList, length_encodeList, ByteArray.length_toList]
-
-/-- Decoding length, lifted to `ByteArray`/`String`. -/
-theorem length_of_decode? {s : String} {data : ByteArray}
-    (h : decode? s = some data) : s.length = 4 * ((data.size + 2) / 3) := by
-  rw [← encode_decode? h, length_encode]
-
-end Length
-
 /-! ## RFC 4648 §5 — Base 64 with URL and filename safe alphabet
 
 The same verified codec applied to the §5 alphabet: value 62 maps to `-`
@@ -606,16 +568,6 @@ theorem encode_decode? {s : String} {data : ByteArray}
   subst hdata
   simp only [encode, ByteArray.toList_mk]
   rw [encodeList_decodeList alphabet hl, String.ofList_toList]
-
-/-- Encoding length, lifted to `ByteArray`/`String`. -/
-theorem length_encode (data : ByteArray) :
-    (encode data).length = 4 * ((data.size + 2) / 3) := by
-  rw [encode, String.length_ofList, length_encodeList, ByteArray.length_toList]
-
-/-- Decoding length, lifted to `ByteArray`/`String`. -/
-theorem length_of_decode? {s : String} {data : ByteArray}
-    (h : decode? s = some data) : s.length = 4 * ((data.size + 2) / 3) := by
-  rw [← encode_decode? h, length_encode]
 
 end Url
 

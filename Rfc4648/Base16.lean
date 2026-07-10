@@ -218,36 +218,4 @@ theorem encode_decode? {s : String} {data : ByteArray}
 
 end RoundTrip
 
-/-! ## Output length
-
-Base16 has no padding, so the encoding of `n` bytes is exactly `2 * n`
-characters, and conversely anything the strict decoder accepts has even
-length. -/
-
-section Length
-
-/-- The encoding of `n` bytes has exactly `2 * n` characters. -/
-theorem length_encodeList (α : Alphabet 16) : ∀ bs : List UInt8,
-    (encodeList α bs).length = 2 * bs.length
-  | [] => rfl
-  | b :: rest => by
-    simp only [encodeList, List.length_cons, length_encodeList α rest]
-    omega
-
-/-- Anything the strict decoder accepts is twice as long as its output. -/
-theorem length_of_decodeList {α : Alphabet 16} {cs : List Char} {bs : List UInt8}
-    (h : decodeList α cs = some bs) : cs.length = 2 * bs.length := by
-  rw [← encodeList_decodeList α h, length_encodeList]
-
-/-- Encoding length, lifted to `ByteArray`/`String`. -/
-theorem length_encode (data : ByteArray) : (encode data).length = 2 * data.size := by
-  rw [encode, String.length_ofList, length_encodeList, ByteArray.length_toList]
-
-/-- Decoding length, lifted to `ByteArray`/`String`. -/
-theorem length_of_decode? {s : String} {data : ByteArray}
-    (h : decode? s = some data) : s.length = 2 * data.size := by
-  rw [← encode_decode? h, length_encode]
-
-end Length
-
 end Rfc4648.Base16

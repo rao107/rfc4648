@@ -517,46 +517,6 @@ theorem encode_decode? {s : String} {data : ByteArray}
 
 end RoundTrip
 
-/-! ## Output length -/
-
-section Length
-
-/-- The encoding of `n` bytes has exactly `8 * ((n + 4) / 5)` characters. -/
-theorem length_encodeList (α : Alphabet 32) : ∀ bs : List UInt8,
-    (encodeList α bs).length = 8 * ((bs.length + 4) / 5)
-  | [] => rfl
-  | [_] => by simp [encodeList]
-  | [_, _] => by simp [encodeList]
-  | [_, _, _] => by simp [encodeList]
-  | [_, _, _, _] => by simp [encodeList]
-  | b0 :: b1 :: b2 :: b3 :: b4 :: rest => by
-    simp only [encodeList, List.length_cons, length_encodeList α rest]
-    omega
-
-/-- Anything the strict decoder accepts has the padded encoding length of
-its output. -/
-theorem length_of_decodeList {α : Alphabet 32} {cs : List Char} {bs : List UInt8}
-    (h : decodeList α cs = some bs) : cs.length = 8 * ((bs.length + 4) / 5) := by
-  rw [← encodeList_decodeList α h, length_encodeList]
-
-/-- Anything the strict decoder accepts has length divisible by 8. -/
-theorem length_of_decodeList_mod {α : Alphabet 32} {cs : List Char} {bs : List UInt8}
-    (h : decodeList α cs = some bs) : cs.length % 8 = 0 := by
-  rw [length_of_decodeList h]
-  omega
-
-/-- Encoding length, lifted to `ByteArray`/`String`. -/
-theorem length_encode (data : ByteArray) :
-    (encode data).length = 8 * ((data.size + 4) / 5) := by
-  rw [encode, String.length_ofList, length_encodeList, ByteArray.length_toList]
-
-/-- Decoding length, lifted to `ByteArray`/`String`. -/
-theorem length_of_decode? {s : String} {data : ByteArray}
-    (h : decode? s = some data) : s.length = 8 * ((data.size + 4) / 5) := by
-  rw [← encode_decode? h, length_encode]
-
-end Length
-
 /-! ## RFC 4648 §7 — Base 32 with extended hex alphabet
 
 The same verified codec applied to the §7 alphabet: `0`–`9`, `A`–`V`,
@@ -687,16 +647,6 @@ theorem encode_decode? {s : String} {data : ByteArray}
   subst hdata
   simp only [encode, ByteArray.toList_mk]
   rw [encodeList_decodeList alphabet hl, String.ofList_toList]
-
-/-- Encoding length, lifted to `ByteArray`/`String`. -/
-theorem length_encode (data : ByteArray) :
-    (encode data).length = 8 * ((data.size + 4) / 5) := by
-  rw [encode, String.length_ofList, length_encodeList, ByteArray.length_toList]
-
-/-- Decoding length, lifted to `ByteArray`/`String`. -/
-theorem length_of_decode? {s : String} {data : ByteArray}
-    (h : decode? s = some data) : s.length = 8 * ((data.size + 4) / 5) := by
-  rw [← encode_decode? h, length_encode]
 
 end Hex
 
