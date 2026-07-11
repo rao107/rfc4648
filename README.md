@@ -90,31 +90,61 @@ kernel-checked by plain `decide`.
 ```sh
 lake build          # builds the library and runs all compile-time checks
 lake exe rfc4648    # runs Main.lean
-lake exe bench      # times encode/decode for all five alphabets (~40s)
+bench/run.sh        # base64 throughput vs. mainstream languages (see Benchmark)
 ```
 
 ## Benchmark
 
-`Bench.lean` times `encode` and `decode?` for each alphabet over
-random inputs from 16 B to 1 MiB, reporting per-call time and
-throughput for the fastest of five trials. On one desktop core, base64
-encoding runs at ~115–215 MiB/s via the verified fast path
-(`Rfc4648/Fast.lean`): a byte-level encoder that reads 3-byte groups
-straight from the input, looks characters up in a precomputed table,
-pushes raw bytes into an exactly-sized buffer, and wraps the result
-with the *unchecked* `String` constructor — its `IsValidUTF8`
-obligation is discharged by the proof that the output equals the list
-model's, so the validation the runtime would do is replaced by a
-theorem. It is installed with `@[csimp]`, so the substitution is also
-justified by proof, not trust. Base64 decoding runs at ~15–30 MiB/s,
-still paying for `String.toList` on the input side. The other codecs
-use the list model directly: roughly 25–40 MiB/s encode and
-15–30 MiB/s decode, sagging at the largest sizes where the intermediate
-`List Char`/`List UInt8` costs more than the byte-shuffling itself.
+`bench/run.sh` compares this project's base64 against mainstream
+implementations in other languages over the same workload — random inputs
+from 16 B to 1 MiB, per direction, best of five trials with one warmup:
 
-Run it compiled, as above: `encodeList` and `decodeList` recurse once per
-byte, and the interpreter (`lean --run`) overflows its stack well before
-1 MiB.
+- **Lean (this project)** — the verified `Base64.encode` / `decode?`, i.e.
+  the byte-level fast path (`Rfc4648/Fast.lean`) installed by `@[csimp]`
+  (`bench/LeanBase64.lean`, run compiled via `lake exe bench`);
+- **Python** `base64` (stdlib, C-backed), **Node** `Buffer` (native),
+  **Go** `encoding/base64` (stdlib), **C** via OpenSSL `libcrypto`
+  (`EVP_EncodeBlock`/`EVP_DecodeBlock`), and the **Rust** `base64` crate
+  (0.22).
+
+Each program mirrors the same methodology and emits CSV;
+`bench/run.sh` builds and runs them all and `bench/compare.py` prints the
+table:
+
+```sh
+bench/run.sh            # full comparison (~1–2 min; builds the Rust crate first time)
+bench/run.sh --no-lean  # skip the Lean build/run
+```
+
+The verified fast path is a byte-level encoder that reads 3-byte groups
+straight from the input, looks characters up in a precomputed table,
+pushes raw bytes into an exactly-sized buffer, and wraps the result with
+the *unchecked* `String` constructor — its `IsValidUTF8` obligation is
+discharged by the proof that the output equals the list model's, so the
+validation the runtime would do is replaced by a theorem, and the
+`@[csimp]` swap itself is justified by proof, not trust.
+
+Representative single-core throughput at 1 MiB (MiB/s; higher is better,
+numbers swing ±10% run to run):
+
+| implementation | encode | decode |
+|---|--:|--:|
+| **Lean (this project)** | ~330 | ~27 |
+| C — OpenSSL `libcrypto` | ~2400 | ~2100 |
+| Rust — `base64` 0.22 | ~3200 | ~2300 |
+| Go — `encoding/base64` | ~750 | ~1490 |
+| Node — `Buffer` | ~2700 | ~3300 |
+| Python — `base64` | ~1120 | ~1410 |
+
+The verified encoder lands in the same order of magnitude as the
+scalar/stdlib field — ahead of Go, behind Python's C core — while the
+SIMD-accelerated Rust crate and OpenSSL run ~7–10× faster still. The
+decoder is the outlier: at ~27 MiB/s it trails every one of these by
+50–80×, because `decodeFast?` still walks a `List Char` calling `ofChar?`
+per character where the others read bytes through a lookup table. That
+gap is the concrete payoff waiting for a byte-level, `@[csimp]`-installed
+decoder proved equal to `decodeList`, the same treatment the encoder
+already got.
 
 Toolchain: `leanprover/lean4:v4.31.0` (see `lean-toolchain`). CI runs
 `lake build` via [lean-action](https://github.com/leanprover/lean-action).

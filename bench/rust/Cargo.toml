@@ -1,0 +1,14 @@
+[package]
+name = "rs_base64_bench"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "rs_base64_bench"
+path = "src/main.rs"
+
+[dependencies]
+base64 = "0.22"
+
+[profile.release]
+opt-level = 3

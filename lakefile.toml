@@ -11,4 +11,4 @@ root = "Main"
 
 [[lean_exe]]
 name = "bench"
-root = "Bench"
+root = "bench.LeanBase64"
