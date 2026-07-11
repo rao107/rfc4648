@@ -1,3 +1,4 @@
+import Std.Tactic.BVDecide
 import Rfc4648.Base64
 
 /-!
@@ -209,18 +210,187 @@ theorem decodeFast?_eq_model (α : Alphabet 64) (s : String) :
 
 end Model
 
+/-! ## Byte-level encoder
+
+`encodeFast` still pays per character for `α.toChar` (a comparison chain
+plus a `Char.ofNat` validity check) and for `String.push` (UTF-8 size
+dispatch). This encoder precomputes the alphabet's 64 UTF-8 bytes in a
+table and pushes raw bytes onto a `ByteArray`, then wraps the result as
+a `String` via the *unchecked* runtime constructor — the `IsValidUTF8`
+obligation is discharged by the equality proof with `encodeGo`, whose
+output is a `String` and therefore valid. The proof does the work the
+runtime would otherwise do. -/
+
+/-- The alphabet's characters as their single UTF-8 bytes. -/
+private def mkTable (α : Alphabet 64) : ByteArray :=
+  (List.ofFn fun i : Fin 64 => (α.toChar (UInt8.ofNat i.val)).val.toUInt8).toByteArray
+
+/-- Byte-level base64 encoder over a precomputed alphabet table. -/
+private def encodeGoB (tbl : ByteArray) (data : ByteArray) (i : Nat) (acc : ByteArray) :
+    ByteArray :=
+  if h3 : i + 3 ≤ data.size then
+    encodeGoB tbl data (i + 3) <| (((acc.push
+      (tbl.get! (data[i]'(by omega) >>> 2).toNat)).push
+      (tbl.get! (((data[i]'(by omega) &&& 0x03) <<< 4) ||| (data[i + 1]'(by omega) >>> 4)).toNat)).push
+      (tbl.get! (((data[i + 1]'(by omega) &&& 0x0F) <<< 2) ||| (data[i + 2]'(by omega) >>> 6)).toNat)).push
+      (tbl.get! (data[i + 2]'(by omega) &&& 0x3F).toNat)
+  else if h1 : data.size = i + 1 then
+    (((acc.push
+      (tbl.get! (data[i]'(by omega) >>> 2).toNat)).push
+      (tbl.get! ((data[i]'(by omega) &&& 0x03) <<< 4).toNat)).push
+      '='.val.toUInt8).push '='.val.toUInt8
+  else if h2 : data.size = i + 2 then
+    (((acc.push
+      (tbl.get! (data[i]'(by omega) >>> 2).toNat)).push
+      (tbl.get! (((data[i]'(by omega) &&& 0x03) <<< 4) ||| (data[i + 1]'(by omega) >>> 4)).toNat)).push
+      (tbl.get! ((data[i + 1]'(by omega) &&& 0x0F) <<< 2).toNat)).push '='.val.toUInt8
+  else acc
+termination_by data.size - i
+
+section ByteModel
+
+private theorem v0_lt (b0 : UInt8) : b0 >>> 2 < 64 := by bv_decide
+
+private theorem v1_lt (b0 b1 : UInt8) :
+    ((b0 &&& 0x03) <<< 4) ||| (b1 >>> 4) < 64 := by bv_decide
+
+private theorem v1p_lt (b0 : UInt8) : (b0 &&& 0x03) <<< 4 < 64 := by bv_decide
+
+private theorem v2_lt (b1 b2 : UInt8) :
+    ((b1 &&& 0x0F) <<< 2) ||| (b2 >>> 6) < 64 := by bv_decide
+
+private theorem v2p_lt (b1 : UInt8) : (b1 &&& 0x0F) <<< 2 < 64 := by bv_decide
+
+private theorem v3_lt (b2 : UInt8) : b2 &&& 0x3F < 64 := by bv_decide
+
+private theorem get!_eq (b : ByteArray) (i : Nat) : b.get! i = b.data[i]! := by
+  cases b
+  rfl
+
+private theorem mkTable_get! (α : Alphabet 64) {v : UInt8} (hv : v < 64) :
+    (mkTable α).get! v.toNat = (α.toChar v).val.toUInt8 := by
+  have hvn : v.toNat < 64 := hv
+  have hdata : (mkTable α).data.toList =
+      List.ofFn fun i : Fin 64 => (α.toChar (UInt8.ofNat i.val)).val.toUInt8 :=
+    List.toList_data_toByteArray
+  have hsz : (mkTable α).data.size = 64 := by
+    rw [← Array.length_toList, hdata, List.length_ofFn]
+  rw [get!_eq, getElem!_pos _ _ (by omega), ← Array.getElem_toList,
+    List.getElem_of_eq hdata, List.getElem_ofFn, UInt8.ofNat_toNat]
+
+private theorem toByteArray_push_ascii (s : String) (c : Char) (hc : c.utf8Size = 1) :
+    (s.push c).toByteArray = s.toByteArray.push c.val.toUInt8 := by
+  rw [String.toByteArray_push, List.utf8Encode_singleton,
+    String.utf8EncodeChar_eq_singleton hc]
+  generalize s.toByteArray = b
+  cases b
+  apply bext
+  refine Array.toList_inj.mp ?_
+  simp [-Array.toList_inj, ByteArray.push]
+
+private theorem encodeGoB_eq (α : Alphabet 64)
+    (h : ∀ v : UInt8, v < 64 → (α.toChar v).utf8Size = 1) (data : ByteArray)
+    (i : Nat) (acc : ByteArray) (sacc : String) (hacc : acc = sacc.toByteArray) :
+    encodeGoB (mkTable α) data i acc = (encodeGo α data i sacc).toByteArray := by
+  revert sacc hacc
+  fun_induction encodeGoB (mkTable α) data i acc with
+  | case1 i acc h3 ih =>
+    intro sacc hacc
+    rw [encodeGo.eq_def, dif_pos h3]
+    refine ih _ ?_
+    subst hacc
+    rw [toByteArray_push_ascii _ _ (h _ (v3_lt _)),
+      toByteArray_push_ascii _ _ (h _ (v2_lt _ _)),
+      toByteArray_push_ascii _ _ (h _ (v1_lt _ _)),
+      toByteArray_push_ascii _ _ (h _ (v0_lt _)),
+      mkTable_get! α (v0_lt _), mkTable_get! α (v1_lt _ _),
+      mkTable_get! α (v2_lt _ _), mkTable_get! α (v3_lt _)]
+  | case2 i acc h3 h1 =>
+    intro sacc hacc
+    rw [encodeGo.eq_def, dif_neg h3, dif_pos h1]
+    subst hacc
+    rw [toByteArray_push_ascii _ _ (by decide : ('=' : Char).utf8Size = 1),
+      toByteArray_push_ascii _ _ (by decide : ('=' : Char).utf8Size = 1),
+      toByteArray_push_ascii _ _ (h _ (v1p_lt _)),
+      toByteArray_push_ascii _ _ (h _ (v0_lt _)),
+      mkTable_get! α (v0_lt _), mkTable_get! α (v1p_lt _)]
+  | case3 i acc h3 h1 h2 =>
+    intro sacc hacc
+    rw [encodeGo.eq_def, dif_neg h3, dif_neg h1, dif_pos h2]
+    subst hacc
+    rw [toByteArray_push_ascii _ _ (by decide : ('=' : Char).utf8Size = 1),
+      toByteArray_push_ascii _ _ (h _ (v2p_lt _)),
+      toByteArray_push_ascii _ _ (h _ (v1_lt _ _)),
+      toByteArray_push_ascii _ _ (h _ (v0_lt _)),
+      mkTable_get! α (v0_lt _), mkTable_get! α (v1_lt _ _),
+      mkTable_get! α (v2p_lt _)]
+  | case4 i acc h3 h1 h2 =>
+    intro sacc hacc
+    rw [encodeGo.eq_def, dif_neg h3, dif_neg h1, dif_neg h2]
+    exact hacc
+
+end ByteModel
+
+private theorem emptyWithCapacity_eq (c : Nat) :
+    ByteArray.emptyWithCapacity c = ByteArray.empty := by
+  apply bext
+  rfl
+
+/-- Byte-level base64 encoder. The alphabet table is passed in (so
+callers can hoist it to a constant computed once), the output buffer is
+preallocated at the exact final size, and the `IsValidUTF8` obligation
+of the unchecked `String` constructor is discharged via the equality
+with the `String`-level encoder — no validation happens at runtime. -/
+def encodeFaster (α : Alphabet 64)
+    (h : ∀ v : UInt8, v < 64 → (α.toChar v).utf8Size = 1)
+    (tbl : ByteArray) (htbl : tbl = mkTable α) (data : ByteArray) : String :=
+  String.ofByteArray
+    (encodeGoB tbl data 0 (ByteArray.emptyWithCapacity (4 * ((data.size + 2) / 3))))
+    (by
+      rw [htbl, emptyWithCapacity_eq,
+        encodeGoB_eq α h data 0 ByteArray.empty "" rfl]
+      exact (encodeGo α data 0 "").isValidUTF8)
+
+/-- The byte-level encoder computes exactly the model encoding. -/
+theorem encodeFaster_eq_model (α : Alphabet 64)
+    (h : ∀ v : UInt8, v < 64 → (α.toChar v).utf8Size = 1)
+    (tbl : ByteArray) (htbl : tbl = mkTable α) (data : ByteArray) :
+    encodeFaster α h tbl htbl data = String.ofList (encodeList α data.toList) := by
+  rw [← encodeFast_eq_model, ← String.toByteArray_inj]
+  show encodeGoB tbl data 0 _ = _
+  rw [htbl, emptyWithCapacity_eq]
+  exact encodeGoB_eq α h data 0 ByteArray.empty "" rfl
+
 /-! ## Installing the fast path
 
 `@[csimp]` swaps the compiled implementation of `encode`/`decode?` for
 the fast versions; the substitution is justified by the equality proofs
 above, so nothing is trusted beyond what the theorems already establish. -/
 
+section Ascii
+
+set_option maxRecDepth 4096
+
+private theorem alphabet_ascii : ∀ v : UInt8, v < 64 →
+    (alphabet.toChar v).utf8Size = 1 :=
+  uint8_all (by decide)
+
+private theorem url_alphabet_ascii : ∀ v : UInt8, v < 64 →
+    (Url.alphabet.toChar v).utf8Size = 1 :=
+  uint8_all (by decide)
+
+end Ascii
+
+/-- The §4 alphabet table, computed once at initialization. -/
+private def stdTable : ByteArray := mkTable alphabet
+
 private def encodeImpl : ByteArray → String :=
-  encodeFast alphabet
+  encodeFaster alphabet alphabet_ascii stdTable rfl
 
 @[csimp]
 private theorem encode_eq_encodeImpl : @encode = @encodeImpl :=
-  funext fun data => (encodeFast_eq_model alphabet data).symm
+  funext fun data =>
+    (encodeFaster_eq_model alphabet alphabet_ascii stdTable rfl data).symm
 
 private def decodeImpl : String → Option ByteArray :=
   decodeFast? alphabet
@@ -231,12 +401,16 @@ private theorem decode?_eq_decodeImpl : @decode? = @decodeImpl :=
 
 namespace Url
 
+/-- The §5 alphabet table, computed once at initialization. -/
+private def urlTable : ByteArray := mkTable Url.alphabet
+
 private def encodeImpl : ByteArray → String :=
-  encodeFast Url.alphabet
+  encodeFaster Url.alphabet url_alphabet_ascii urlTable rfl
 
 @[csimp]
 private theorem encode_eq_encodeImpl : @Url.encode = @Url.encodeImpl :=
-  funext fun data => (encodeFast_eq_model Url.alphabet data).symm
+  funext fun data =>
+    (encodeFaster_eq_model Url.alphabet url_alphabet_ascii urlTable rfl data).symm
 
 private def decodeImpl : String → Option ByteArray :=
   decodeFast? Url.alphabet

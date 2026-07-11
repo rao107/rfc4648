@@ -98,12 +98,17 @@ lake exe bench      # times encode/decode for all five alphabets (~40s)
 `Bench.lean` times `encode` and `decode?` for each alphabet over
 random inputs from 16 B to 1 MiB, reporting per-call time and
 throughput for the fastest of five trials. On one desktop core, base64
-encoding runs at 55–80 MiB/s via the verified fast path
-(`Rfc4648/Fast.lean`: allocation-free implementations proved equal to
-the list model and installed with `@[csimp]`, so the substitution is
-justified by a theorem, not trust); base64 decoding runs at 25–33 MiB/s,
-still paying for the `String.toList` on the input side. The other
-codecs use the list model directly: roughly 25–40 MiB/s encode and
+encoding runs at ~115–215 MiB/s via the verified fast path
+(`Rfc4648/Fast.lean`): a byte-level encoder that reads 3-byte groups
+straight from the input, looks characters up in a precomputed table,
+pushes raw bytes into an exactly-sized buffer, and wraps the result
+with the *unchecked* `String` constructor — its `IsValidUTF8`
+obligation is discharged by the proof that the output equals the list
+model's, so the validation the runtime would do is replaced by a
+theorem. It is installed with `@[csimp]`, so the substitution is also
+justified by proof, not trust. Base64 decoding runs at ~15–30 MiB/s,
+still paying for `String.toList` on the input side. The other codecs
+use the list model directly: roughly 25–40 MiB/s encode and
 15–30 MiB/s decode, sagging at the largest sizes where the intermediate
 `List Char`/`List UInt8` costs more than the byte-shuffling itself.
 
