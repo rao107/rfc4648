@@ -55,52 +55,21 @@ theorem toChar_ne_pad : ∀ v : UInt8, v < 32 → toChar v ≠ '=' :=
 
 theorem ofChar?_eq_some {c : Char} {v : UInt8} (h : ofChar? c = some v) :
     v < 32 ∧ toChar v = c := by
-  unfold ofChar? at h
-  split at h
-  case isTrue hAZ =>
-    obtain ⟨hA, hZ⟩ := hAZ
-    have hA' : 65 ≤ c.toNat := hA
-    have hZ' : c.toNat ≤ 90 := hZ
-    injection h with hv
-    subst hv
-    have eA : 'A'.toNat = 65 := rfl
-    have hle : UInt8.ofNat 65 ≤ UInt8.ofNat c.toNat := by
-      rw [UInt8.le_iff_toNat_le, UInt8.toNat_ofNat', UInt8.toNat_ofNat']
-      omega
-    have hval : (c.toNat.toUInt8 - 'A'.toNat.toUInt8).toNat = c.toNat - 65 := by
-      simp only [Nat.toUInt8_eq, eA, UInt8.toNat_sub_of_le _ _ hle, UInt8.toNat_ofNat']
-      omega
-    refine ⟨by rw [UInt8.lt_iff_toNat_lt, hval]; show c.toNat - 65 < 32; omega, ?_⟩
-    unfold toChar
-    rw [if_pos (show _ < (26 : UInt8) by
-      rw [UInt8.lt_iff_toNat_lt, hval]; show c.toNat - 65 < 26; omega)]
-    rw [hval, show 'A'.toNat + (c.toNat - 65) = c.toNat by
-      show 65 + (c.toNat - 65) = c.toNat; omega]
-    exact Char.ofNat_toNat c
-  case isFalse =>
+  -- The accepted ranges are ASCII, so `c` is one of 128 characters and
+  -- the claim reduces to an exhaustive check.
+  have hc : c.toNat < 128 := by
+    unfold ofChar? at h
     split at h
-    case isTrue h27 =>
-      obtain ⟨h2, h7⟩ := h27
-      have h2' : 50 ≤ c.toNat := h2
-      have h7' : c.toNat ≤ 55 := h7
-      injection h with hv
-      subst hv
-      have e2 : '2'.toNat = 50 := rfl
-      have hle : UInt8.ofNat 50 ≤ UInt8.ofNat c.toNat := by
-        rw [UInt8.le_iff_toNat_le, UInt8.toNat_ofNat', UInt8.toNat_ofNat']
-        omega
-      have hval : (c.toNat.toUInt8 - '2'.toNat.toUInt8 + 26).toNat = c.toNat - 24 := by
-        simp only [Nat.toUInt8_eq, e2, UInt8.toNat_add, UInt8.toNat_sub_of_le _ _ hle,
-          UInt8.toNat_ofNat', UInt8.toNat_ofNat]
-        omega
-      refine ⟨by rw [UInt8.lt_iff_toNat_lt, hval]; show c.toNat - 24 < 32; omega, ?_⟩
-      unfold toChar
-      rw [if_neg (show ¬(_ < (26 : UInt8)) by
-        rw [UInt8.lt_iff_toNat_lt, hval]; show ¬(c.toNat - 24 < 26); omega)]
-      rw [hval, show '2'.toNat + (c.toNat - 24 - 26) = c.toNat by
-        show 50 + (c.toNat - 24 - 26) = c.toNat; omega]
-      exact Char.ofNat_toNat c
-    case isFalse => simp at h
+    case isTrue h' => have : c.toNat ≤ 90 := h'.2; omega
+    case isFalse =>
+      split at h
+      case isTrue h' => have : c.toNat ≤ 55 := h'.2; omega
+      case isFalse => simp at h
+  have hall := char_all_lt
+    (P := fun c => ((ofChar? c).all fun v => v < 32 && toChar v == c) = true)
+    (by decide) c hc
+  rw [h] at hall
+  simpa using hall
 
 end CharLemmas
 
@@ -424,7 +393,7 @@ private theorem decodeGo_eq (α : Alphabet 32) : ∀ (cs : List Char) (acc : Byt
     decodeGo α cs acc = (decodeList α cs).map fun l => ⟨acc.data ++ l.toArray⟩
   | [], acc => by
     simp only [decodeGo, decodeList, Option.map_some]
-    exact congrArg some (bext (by simp))
+    exact congrArg some (ByteArray.ext (by simp))
   | c0 :: c1 :: c2 :: c3 :: c4 :: c5 :: c6 :: c7 :: rest, acc => by
     simp only [decodeGo, decodeList, Option.bind_eq_bind]
     cases α.ofChar? c0 with
@@ -436,11 +405,7 @@ private theorem decodeGo_eq (α : Alphabet 32) : ∀ (cs : List Char) (acc : Byt
         simp only [Option.bind_some]
         split
         · split
-          · exact congrArg some (bext (by
-              cases acc
-              simp only [ByteArray.push]
-              refine Array.toList_inj.mp ?_
-              simp [-Array.toList_inj]))
+          · exact congrArg some (ByteArray.ext (by simp [ByteArray.data_push]))
           · simp
         · cases α.ofChar? c2 with
           | none => simp
@@ -452,11 +417,8 @@ private theorem decodeGo_eq (α : Alphabet 32) : ∀ (cs : List Char) (acc : Byt
               simp only [Option.bind_some]
               split
               · split
-                · exact congrArg some (bext (by
-                    cases acc
-                    simp only [ByteArray.push]
-                    refine Array.toList_inj.mp ?_
-                    simp [-Array.toList_inj]))
+                · exact congrArg some (ByteArray.ext (by
+                    simp [ByteArray.data_push, ← Array.toList_inj]))
                 · simp
               · cases α.ofChar? c4 with
                 | none => simp
@@ -464,11 +426,8 @@ private theorem decodeGo_eq (α : Alphabet 32) : ∀ (cs : List Char) (acc : Byt
                   simp only [Option.bind_some]
                   split
                   · split
-                    · exact congrArg some (bext (by
-                        cases acc
-                        simp only [ByteArray.push]
-                        refine Array.toList_inj.mp ?_
-                        simp [-Array.toList_inj]))
+                    · exact congrArg some (ByteArray.ext (by
+                        simp [ByteArray.data_push, ← Array.toList_inj]))
                     · simp
                   · cases α.ofChar? c5 with
                     | none => simp
@@ -480,11 +439,8 @@ private theorem decodeGo_eq (α : Alphabet 32) : ∀ (cs : List Char) (acc : Byt
                         simp only [Option.bind_some]
                         split
                         · split
-                          · exact congrArg some (bext (by
-                              cases acc
-                              simp only [ByteArray.push]
-                              refine Array.toList_inj.mp ?_
-                              simp [-Array.toList_inj]))
+                          · exact congrArg some (ByteArray.ext (by
+                              simp [ByteArray.data_push, ← Array.toList_inj]))
                           · simp
                         · cases α.ofChar? c7 with
                           | none => simp
@@ -495,11 +451,7 @@ private theorem decodeGo_eq (α : Alphabet 32) : ∀ (cs : List Char) (acc : Byt
                             | none => simp
                             | some tail =>
                               simp only [Option.map_some]
-                              exact congrArg some (bext (by
-                                cases acc
-                                simp only [ByteArray.push]
-                                refine Array.toList_inj.mp ?_
-                                simp [-Array.toList_inj]))
+                              exact congrArg some (ByteArray.ext (by simp [ByteArray.data_push]))
   | [_], _ => by simp [decodeGo, decodeList]
   | [_, _], _ => by simp [decodeGo, decodeList]
   | [_, _, _], _ => by simp [decodeGo, decodeList]
@@ -516,9 +468,7 @@ private theorem decodeFast?_eq_model (α : Alphabet 32) (s : String) :
   | none => rfl
   | some l =>
     simp only [Option.map_some]
-    exact congrArg some (bext (by
-      rw [show ByteArray.empty.data = #[] from rfl]
-      simp))
+    exact congrArg some (ByteArray.ext (by simp [ByteArray.data_empty]))
 
 end Model
 
@@ -583,14 +533,9 @@ section ByteModel
 
 private theorem mkTable_get! (α : Alphabet 32) {v : UInt8} (hv : v < 32) :
     (mkTable α).get! v.toNat = (α.toChar v).val.toUInt8 := by
-  have hvn : v.toNat < 32 := hv
-  have hdata : (mkTable α).data.toList =
-      List.ofFn fun i : Fin 32 => (α.toChar (UInt8.ofNat i.val)).val.toUInt8 :=
-    List.toList_data_toByteArray
-  have hsz : (mkTable α).data.size = 32 := by
-    rw [← Array.length_toList, hdata, List.length_ofFn]
-  rw [get!_eq, getElem!_pos _ _ (by omega), ← Array.getElem_toList,
-    List.getElem_of_eq hdata, List.getElem_ofFn, UInt8.ofNat_toNat]
+  have h : v.toNat < 32 := hv
+  unfold mkTable
+  rw [get!_ofFn_toByteArray _ h, UInt8.ofNat_toNat]
 
 private theorem encodeGoB_eq (α : Alphabet 32)
     (h : ∀ v : UInt8, v < 32 → (α.toChar v).utf8Size = 1) (data : ByteArray)
@@ -1047,52 +992,21 @@ theorem toChar_ne_pad : ∀ v : UInt8, v < 32 → toChar v ≠ '=' :=
 
 theorem ofChar?_eq_some {c : Char} {v : UInt8} (h : ofChar? c = some v) :
     v < 32 ∧ toChar v = c := by
-  unfold ofChar? at h
-  split at h
-  case isTrue h09 =>
-    obtain ⟨h0, h9⟩ := h09
-    have h0' : 48 ≤ c.toNat := h0
-    have h9' : c.toNat ≤ 57 := h9
-    injection h with hv
-    subst hv
-    have e0 : '0'.toNat = 48 := rfl
-    have hle : UInt8.ofNat 48 ≤ UInt8.ofNat c.toNat := by
-      rw [UInt8.le_iff_toNat_le, UInt8.toNat_ofNat', UInt8.toNat_ofNat']
-      omega
-    have hval : (c.toNat.toUInt8 - '0'.toNat.toUInt8).toNat = c.toNat - 48 := by
-      simp only [Nat.toUInt8_eq, e0, UInt8.toNat_sub_of_le _ _ hle, UInt8.toNat_ofNat']
-      omega
-    refine ⟨by rw [UInt8.lt_iff_toNat_lt, hval]; show c.toNat - 48 < 32; omega, ?_⟩
-    unfold toChar
-    rw [if_pos (show _ < (10 : UInt8) by
-      rw [UInt8.lt_iff_toNat_lt, hval]; show c.toNat - 48 < 10; omega)]
-    rw [hval, show '0'.toNat + (c.toNat - 48) = c.toNat by
-      show 48 + (c.toNat - 48) = c.toNat; omega]
-    exact Char.ofNat_toNat c
-  case isFalse =>
+  -- The accepted ranges are ASCII, so `c` is one of 128 characters and
+  -- the claim reduces to an exhaustive check.
+  have hc : c.toNat < 128 := by
+    unfold ofChar? at h
     split at h
-    case isTrue hAV =>
-      obtain ⟨hA, hV⟩ := hAV
-      have hA' : 65 ≤ c.toNat := hA
-      have hV' : c.toNat ≤ 86 := hV
-      injection h with hv
-      subst hv
-      have eA : 'A'.toNat = 65 := rfl
-      have hle : UInt8.ofNat 65 ≤ UInt8.ofNat c.toNat := by
-        rw [UInt8.le_iff_toNat_le, UInt8.toNat_ofNat', UInt8.toNat_ofNat']
-        omega
-      have hval : (c.toNat.toUInt8 - 'A'.toNat.toUInt8 + 10).toNat = c.toNat - 55 := by
-        simp only [Nat.toUInt8_eq, eA, UInt8.toNat_add, UInt8.toNat_sub_of_le _ _ hle,
-          UInt8.toNat_ofNat', UInt8.toNat_ofNat]
-        omega
-      refine ⟨by rw [UInt8.lt_iff_toNat_lt, hval]; show c.toNat - 55 < 32; omega, ?_⟩
-      unfold toChar
-      rw [if_neg (show ¬(_ < (10 : UInt8)) by
-        rw [UInt8.lt_iff_toNat_lt, hval]; show ¬(c.toNat - 55 < 10); omega)]
-      rw [hval, show 'A'.toNat + (c.toNat - 55 - 10) = c.toNat by
-        show 65 + (c.toNat - 55 - 10) = c.toNat; omega]
-      exact Char.ofNat_toNat c
-    case isFalse => simp at h
+    case isTrue h' => have : c.toNat ≤ 57 := h'.2; omega
+    case isFalse =>
+      split at h
+      case isTrue h' => have : c.toNat ≤ 86 := h'.2; omega
+      case isFalse => simp at h
+  have hall := char_all_lt
+    (P := fun c => ((ofChar? c).all fun v => v < 32 && toChar v == c) = true)
+    (by decide) c hc
+  rw [h] at hall
+  simpa using hall
 
 end CharLemmas
 

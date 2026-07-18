@@ -80,10 +80,12 @@ kernel-checked by plain `decide`.
 - Bit-manipulation facts (e.g. reassembling a byte from its 6-bit
   pieces) are discharged by `bv_decide`, stated directly over full
   `UInt8`s with `<` hypotheses where needed — no case enumeration.
-- Character-map inverses (`ofChar?_eq_some`) are proved by case analysis
-  over the alphabet ranges, since `Char` cannot be enumerated; the
-  forward direction uses `decide` via a bounded-`Nat` bridge in
-  `Rfc4648/Util.lean` (`Nat.decidableBallLT`).
+- Character-map lemmas are discharged by `decide` via bounded-`Nat`
+  bridges in `Rfc4648/Util.lean` (`Nat.decidableBallLT`): the forward
+  direction (`ofChar?_toChar`) enumerates the 256 byte values, and the
+  inverse direction (`ofChar?_eq_some`) — where `Char` itself cannot be
+  enumerated — first bounds accepted characters to ASCII and then
+  enumerates the 128 code points.
 - The main theorems are structural inductions over encoding groups
   (3 bytes ↔ 4 chars for base64, 5 ↔ 8 for base32, 1 ↔ 2 for base16),
   with one branch per padding shape.
@@ -133,18 +135,18 @@ numbers swing ±10% run to run):
 
 | implementation | encode | decode |
 |---|--:|--:|
-| **Lean (this project)** | ~330 | ~27 |
+| **Lean (this project)** | ~290 | ~24 |
 | C — OpenSSL `libcrypto` | ~2400 | ~2100 |
-| Rust — `base64` 0.22 | ~3200 | ~2300 |
-| Go — `encoding/base64` | ~750 | ~1490 |
-| Node — `Buffer` | ~2700 | ~3300 |
-| Python — `base64` | ~1120 | ~1410 |
+| Rust — `base64` 0.22 | ~3200 | ~2400 |
+| Go — `encoding/base64` | ~830 | ~1200 |
+| Node — `Buffer` | ~2700 | ~3100 |
+| Python — `base64` | ~1030 | ~1260 |
 
 The verified encoder lands in the same order of magnitude as the
-scalar/stdlib field — ahead of Go, behind Python's C core — while the
-SIMD-accelerated Rust crate and OpenSSL run ~7–10× faster still. The
-decoder is the outlier: at ~27 MiB/s it trails every one of these by
-50–80×, because `decode?` still walks a `List Char` calling `ofChar?`
+scalar/stdlib field — within ~3–4× of Go and Python's C core — while the
+SIMD-accelerated Rust crate and OpenSSL run ~8–11× faster still. The
+decoder is the outlier: at ~24 MiB/s it trails every one of these by
+50–100×, because `decode?` still walks a `List Char` calling `ofChar?`
 per character where the others read bytes through a lookup table. That
 gap is the concrete payoff waiting for a byte-level decoder proved equal
 to `decodeList`, the same treatment the encoder already got.
