@@ -3,8 +3,8 @@ import Rfc4648
 /-!
 # base64 throughput for the verified codec, CSV output
 
-Measures this project's `Base64.encode` / `decode?` — the byte-level fast
-path installed by `@[csimp]` in `Rfc4648.Fast` — with the same methodology as
+Measures this project's `Base64.encode` / `decode?` — defined directly as
+the verified byte-level fast path — with the same methodology as
 the other `bench/` programs (same sizes, best of five trials, one warmup) and
 emits CSV `lean,<size>,<encode MiB/s>,<decode MiB/s>` on stdout. Driven by
 `bench/run.sh`.

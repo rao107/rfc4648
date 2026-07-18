@@ -10,10 +10,14 @@ Encoder and strict decoder for base64, parameterized over an
 `+`/`/`) and `Base64.Url.alphabet` (§5, `-`/`_`, URL and filename safe).
 The codec and all its theorems are proved once, generically.
 
-The core functions `encodeList` and `decodeList` operate on `List UInt8` /
-`List Char` by structural recursion over 3-byte / 4-character groups.
-`encode` and `decode?` are the user-facing wrappers over `ByteArray` and
-`String`.
+The specification `encodeList` / `decodeList` operates on `List UInt8` /
+`List Char` by structural recursion over 3-byte / 4-character groups; all
+theorems are proved against it. The user-facing `encode` and `decode?`
+are allocation-free implementations over `ByteArray` and `String` — the
+encoder writes table-driven UTF-8 bytes into a preallocated buffer, the
+decoder pushes onto a `ByteArray` accumulator — each proved equal to the
+specification (`encode_eq_model`, `decode?_eq_model`), so every theorem
+transfers to them.
 
 The decoder is strict in the sense of RFC 4648 §3.5 and §12: it rejects
 characters outside the alphabet, misplaced or missing padding, and
@@ -157,7 +161,7 @@ def alphabet : Alphabet 64 where
   toChar_ne_pad := toChar_ne_pad
   ofChar?_eq_some := ofChar?_eq_some
 
-/-! ## The codec, parameterized over the alphabet -/
+/-! ## The specification, parameterized over the alphabet -/
 
 /-- Encode bytes as base64 characters, processing one 24-bit group
 (3 bytes → 4 characters) per step. A final group of 1 or 2 bytes is
@@ -211,14 +215,294 @@ def decodeList (α : Alphabet 64) : List Char → Option (List UInt8)
               tail)
   | _ => none
 
+/-! ## Bounds on the 6-bit values produced by the encoder
+
+These feed the alphabet lemmas and the byte-level table lookups. -/
+
+private theorem v0_lt (b0 : UInt8) : b0 >>> 2 < 64 := by bv_decide
+
+private theorem v1_lt (b0 b1 : UInt8) :
+    ((b0 &&& 0x03) <<< 4) ||| (b1 >>> 4) < 64 := by bv_decide
+
+private theorem v1p_lt (b0 : UInt8) : (b0 &&& 0x03) <<< 4 < 64 := by bv_decide
+
+private theorem v2_lt (b1 b2 : UInt8) :
+    ((b1 &&& 0x0F) <<< 2) ||| (b2 >>> 6) < 64 := by bv_decide
+
+private theorem v2p_lt (b1 : UInt8) : (b1 &&& 0x0F) <<< 2 < 64 := by bv_decide
+
+private theorem v3_lt (b2 : UInt8) : b2 &&& 0x3F < 64 := by bv_decide
+
+/-! ## The implementation
+
+`encodeList`/`decodeList` allocate a cons cell per character, so they
+serve only as the specification. The definitions below are the real
+codec: the encoder reads 3-byte groups straight from the input, looks
+the alphabet's UTF-8 bytes up in a precomputed table, and pushes them
+onto a buffer preallocated at the exact output size; the result is
+wrapped as a `String` by the *unchecked* runtime constructor, whose
+`IsValidUTF8` obligation is discharged by the proof that the bytes equal
+the UTF-8 encoding of the specification's output. The decoder pushes
+decoded bytes onto a `ByteArray` accumulator. -/
+
+/-- The alphabet's characters as their single UTF-8 bytes. -/
+private def mkTable (α : Alphabet 64) : ByteArray :=
+  (List.ofFn fun i : Fin 64 => (α.toChar (UInt8.ofNat i.val)).val.toUInt8).toByteArray
+
+/-- Tail-recursive base64 encoder: reads 3-byte groups directly from
+`data` starting at `i`, pushing the alphabet's UTF-8 bytes from `tbl`
+onto `acc`. -/
+private def encodeGo (tbl : ByteArray) (data : ByteArray) (i : Nat) (acc : ByteArray) :
+    ByteArray :=
+  if h3 : i + 3 ≤ data.size then
+    encodeGo tbl data (i + 3) <| (((acc.push
+      (tbl.get! (data[i]'(by omega) >>> 2).toNat)).push
+      (tbl.get! (((data[i]'(by omega) &&& 0x03) <<< 4) ||| (data[i + 1]'(by omega) >>> 4)).toNat)).push
+      (tbl.get! (((data[i + 1]'(by omega) &&& 0x0F) <<< 2) ||| (data[i + 2]'(by omega) >>> 6)).toNat)).push
+      (tbl.get! (data[i + 2]'(by omega) &&& 0x3F).toNat)
+  else if h1 : data.size = i + 1 then
+    (((acc.push
+      (tbl.get! (data[i]'(by omega) >>> 2).toNat)).push
+      (tbl.get! ((data[i]'(by omega) &&& 0x03) <<< 4).toNat)).push
+      '='.val.toUInt8).push '='.val.toUInt8
+  else if h2 : data.size = i + 2 then
+    (((acc.push
+      (tbl.get! (data[i]'(by omega) >>> 2).toNat)).push
+      (tbl.get! (((data[i]'(by omega) &&& 0x03) <<< 4) ||| (data[i + 1]'(by omega) >>> 4)).toNat)).push
+      (tbl.get! ((data[i + 1]'(by omega) &&& 0x0F) <<< 2).toNat)).push '='.val.toUInt8
+  else acc
+termination_by data.size - i
+
+/-- Tail-recursive base64 decoder: consumes 4-character groups, pushing
+decoded bytes onto `acc`. -/
+private def decodeGo (α : Alphabet 64) : List Char → ByteArray → Option ByteArray
+  | [], acc => some acc
+  | c0 :: c1 :: c2 :: c3 :: rest, acc => do
+    let v0 ← α.ofChar? c0
+    let v1 ← α.ofChar? c1
+    if c2 = '=' then
+      if c3 = '=' ∧ rest = [] ∧ v1 &&& 0x0F = 0 then
+        some (acc.push ((v0 <<< 2) ||| (v1 >>> 4)))
+      else none
+    else do
+      let v2 ← α.ofChar? c2
+      if c3 = '=' then
+        if rest = [] ∧ v2 &&& 0x03 = 0 then
+          some ((acc.push ((v0 <<< 2) ||| (v1 >>> 4))).push
+            ((v1 <<< 4) ||| (v2 >>> 2)))
+        else none
+      else do
+        let v3 ← α.ofChar? c3
+        decodeGo α rest <| ((acc.push
+          ((v0 <<< 2) ||| (v1 >>> 4))).push
+          ((v1 <<< 4) ||| (v2 >>> 2))).push
+          ((v2 <<< 6) ||| v3)
+  | _, _ => none
+
+/-! ### Equivalence with the specification -/
+
+section Model
+
+private theorem drop_two (data : ByteArray) (i : Nat) (h : i + 2 ≤ data.size) :
+    data.toList.drop i =
+      data[i]'(by omega) :: data[i + 1]'(by omega) :: data.toList.drop (i + 2) := by
+  rw [drop_cons data i (by omega), drop_cons data (i + 1) (by omega)]
+
+private theorem drop_three (data : ByteArray) (i : Nat) (h : i + 3 ≤ data.size) :
+    data.toList.drop i =
+      data[i]'(by omega) :: data[i + 1]'(by omega) :: data[i + 2]'(by omega) ::
+        data.toList.drop (i + 3) := by
+  rw [drop_cons data i (by omega), drop_cons data (i + 1) (by omega),
+    drop_cons data (i + 1 + 1) (by omega)]
+
+private theorem append_ofList_cons (s : String) (c : Char) (cs : List Char) :
+    s ++ String.ofList (c :: cs) = (s.push c) ++ String.ofList cs :=
+  str_ext (by simp [String.toList_append, String.toList_push])
+
+private theorem append_ofList_nil (s : String) : s ++ String.ofList [] = s :=
+  str_ext (by simp)
+
+private theorem mkTable_get! (α : Alphabet 64) {v : UInt8} (hv : v < 64) :
+    (mkTable α).get! v.toNat = (α.toChar v).val.toUInt8 := by
+  have hvn : v.toNat < 64 := hv
+  have hdata : (mkTable α).data.toList =
+      List.ofFn fun i : Fin 64 => (α.toChar (UInt8.ofNat i.val)).val.toUInt8 :=
+    List.toList_data_toByteArray
+  have hsz : (mkTable α).data.size = 64 := by
+    rw [← Array.length_toList, hdata, List.length_ofFn]
+  rw [get!_eq, getElem!_pos _ _ (by omega), ← Array.getElem_toList,
+    List.getElem_of_eq hdata, List.getElem_ofFn, UInt8.ofNat_toNat]
+
+/-- The encoder computes the UTF-8 bytes of the specification's output:
+if the accumulator holds the bytes of the string `sacc`, running the loop
+from `i` yields the bytes of `sacc` followed by the encoding of the
+remaining input. In particular the output is valid UTF-8. -/
+private theorem encodeGo_eq (α : Alphabet 64)
+    (h : ∀ v : UInt8, v < 64 → (α.toChar v).utf8Size = 1) (data : ByteArray)
+    (i : Nat) (acc : ByteArray) (sacc : String) (hacc : acc = sacc.toByteArray) :
+    encodeGo (mkTable α) data i acc =
+      (sacc ++ String.ofList (encodeList α (data.toList.drop i))).toByteArray := by
+  revert sacc hacc
+  fun_induction encodeGo (mkTable α) data i acc with
+  | case1 i acc h3 ih =>
+    intro sacc hacc
+    rw [drop_three data i (by omega)]
+    simp only [encodeList, append_ofList_cons]
+    refine ih _ ?_
+    subst hacc
+    rw [toByteArray_push_ascii _ _ (h _ (v3_lt _)),
+      toByteArray_push_ascii _ _ (h _ (v2_lt _ _)),
+      toByteArray_push_ascii _ _ (h _ (v1_lt _ _)),
+      toByteArray_push_ascii _ _ (h _ (v0_lt _)),
+      mkTable_get! α (v0_lt _), mkTable_get! α (v1_lt _ _),
+      mkTable_get! α (v2_lt _ _), mkTable_get! α (v3_lt _)]
+  | case2 i acc h3 h1 =>
+    intro sacc hacc
+    rw [drop_cons data i (by omega), drop_of_size_le data (i + 1) (by omega)]
+    simp only [encodeList, append_ofList_cons, append_ofList_nil]
+    subst hacc
+    rw [toByteArray_push_ascii _ _ (by decide : ('=' : Char).utf8Size = 1),
+      toByteArray_push_ascii _ _ (by decide : ('=' : Char).utf8Size = 1),
+      toByteArray_push_ascii _ _ (h _ (v1p_lt _)),
+      toByteArray_push_ascii _ _ (h _ (v0_lt _)),
+      mkTable_get! α (v0_lt _), mkTable_get! α (v1p_lt _)]
+  | case3 i acc h3 h1 h2 =>
+    intro sacc hacc
+    rw [drop_two data i (by omega), drop_of_size_le data (i + 2) (by omega)]
+    simp only [encodeList, append_ofList_cons, append_ofList_nil]
+    subst hacc
+    rw [toByteArray_push_ascii _ _ (by decide : ('=' : Char).utf8Size = 1),
+      toByteArray_push_ascii _ _ (h _ (v2p_lt _)),
+      toByteArray_push_ascii _ _ (h _ (v1_lt _ _)),
+      toByteArray_push_ascii _ _ (h _ (v0_lt _)),
+      mkTable_get! α (v0_lt _), mkTable_get! α (v1_lt _ _),
+      mkTable_get! α (v2p_lt _)]
+  | case4 i acc h3 h1 h2 =>
+    intro sacc hacc
+    rw [drop_of_size_le data i (by omega)]
+    simp only [encodeList, append_ofList_nil]
+    exact hacc
+
+/-- The encoder loop started on an empty buffer computes exactly the
+UTF-8 bytes of the specification's output. -/
+private theorem encodeGo_empty (α : Alphabet 64)
+    (h : ∀ v : UInt8, v < 64 → (α.toChar v).utf8Size = 1) (data : ByteArray) :
+    encodeGo (mkTable α) data 0 ByteArray.empty =
+      (String.ofList (encodeList α data.toList)).toByteArray := by
+  rw [encodeGo_eq α h data 0 ByteArray.empty "" rfl]
+  exact congrArg String.toByteArray (str_ext (by simp))
+
+private theorem decodeGo_eq (α : Alphabet 64) : ∀ (cs : List Char) (acc : ByteArray),
+    decodeGo α cs acc = (decodeList α cs).map fun l => ⟨acc.data ++ l.toArray⟩
+  | [], acc => by
+    simp only [decodeGo, decodeList, Option.map_some]
+    exact congrArg some (bext (by simp))
+  | c0 :: c1 :: c2 :: c3 :: rest, acc => by
+    simp only [decodeGo, decodeList, Option.bind_eq_bind]
+    cases α.ofChar? c0 with
+    | none => simp
+    | some v0 =>
+      cases α.ofChar? c1 with
+      | none => simp
+      | some v1 =>
+        simp only [Option.bind_some]
+        split
+        · split
+          · exact congrArg some (bext (by
+              cases acc
+              simp only [ByteArray.push]
+              refine Array.toList_inj.mp ?_
+              simp [-Array.toList_inj]))
+          · simp
+        · cases α.ofChar? c2 with
+          | none => simp
+          | some v2 =>
+            simp only [Option.bind_some]
+            split
+            · split
+              · exact congrArg some (bext (by
+                  cases acc
+                  simp only [ByteArray.push]
+                  refine Array.toList_inj.mp ?_
+                  simp [-Array.toList_inj]))
+              · simp
+            · cases α.ofChar? c3 with
+              | none => simp
+              | some v3 =>
+                simp only [Option.bind_some,
+                  decodeGo_eq α rest (((acc.push _).push _).push _)]
+                cases decodeList α rest with
+                | none => simp
+                | some tail =>
+                  simp only [Option.map_some]
+                  exact congrArg some (bext (by
+                    cases acc
+                    simp only [ByteArray.push]
+                    refine Array.toList_inj.mp ?_
+                    simp [-Array.toList_inj]))
+  | [_], _ => by simp [decodeGo, decodeList]
+  | [_, _], _ => by simp [decodeGo, decodeList]
+  | [_, _, _], _ => by simp [decodeGo, decodeList]
+
+/-- The decoder loop started on an empty accumulator computes exactly the
+specification's decoding. -/
+private theorem decodeGo_empty (α : Alphabet 64) (s : String) :
+    decodeGo α s.toList ByteArray.empty =
+      (decodeList α s.toList).map fun l => ByteArray.mk l.toArray := by
+  rw [decodeGo_eq]
+  cases decodeList α s.toList with
+  | none => rfl
+  | some l =>
+    simp only [Option.map_some]
+    exact congrArg some (bext (by
+      rw [show ByteArray.empty.data = #[] from rfl]
+      simp))
+
+end Model
+
+/-! ## The user-facing codec -/
+
+section Ascii
+
+set_option maxRecDepth 4096
+
+private theorem alphabet_ascii : ∀ v : UInt8, v < 64 →
+    (alphabet.toChar v).utf8Size = 1 :=
+  uint8_all (by decide)
+
+end Ascii
+
+/-- The §4 alphabet table, computed once at initialization. -/
+private def stdTable : ByteArray := mkTable alphabet
+
 /-- Encode a byte array as a base64 string (RFC 4648 §4, with padding). -/
 def encode (data : ByteArray) : String :=
-  String.ofList (encodeList alphabet data.toList)
+  String.ofByteArray
+    (encodeGo stdTable data 0 (ByteArray.emptyWithCapacity (4 * ((data.size + 2) / 3))))
+    (by
+      show (encodeGo (mkTable alphabet) data 0 _).IsValidUTF8
+      rw [emptyWithCapacity_eq, encodeGo_empty alphabet alphabet_ascii]
+      exact (String.ofList (encodeList alphabet data.toList)).isValidUTF8)
 
 /-- Strictly decode a base64 string. Returns `none` if the input is not a
 canonical RFC 4648 §4 encoding. -/
 def decode? (s : String) : Option ByteArray :=
-  (decodeList alphabet s.toList).map fun bytes => ByteArray.mk bytes.toArray
+  decodeGo alphabet s.toList ByteArray.empty
+
+/-- `encode` computes exactly the specification `encodeList`; encoder
+theorems transfer through this equality. -/
+theorem encode_eq_model (data : ByteArray) :
+    encode data = String.ofList (encodeList alphabet data.toList) := by
+  rw [← String.toByteArray_inj]
+  show encodeGo (mkTable alphabet) data 0 (ByteArray.emptyWithCapacity _) = _
+  rw [emptyWithCapacity_eq]
+  exact encodeGo_empty alphabet alphabet_ascii data
+
+/-- `decode?` computes exactly the specification `decodeList`; decoder
+theorems transfer through this equality. -/
+theorem decode?_eq_model (s : String) :
+    decode? s = (decodeList alphabet s.toList).map fun bytes => ByteArray.mk bytes.toArray :=
+  decodeGo_empty alphabet s
 
 /-! ## Test vectors (RFC 4648 §10), checked at compile time -/
 
@@ -256,23 +540,6 @@ decoder accepts is the encoding of its output. The list-level theorems
 hold for any `Alphabet 64`. -/
 
 section RoundTrip
-
-/-! Bounds on the 6-bit values produced by the encoder, for feeding the
-alphabet lemmas. -/
-
-private theorem v0_lt (b0 : UInt8) : b0 >>> 2 < 64 := by bv_decide
-
-private theorem v1_lt (b0 b1 : UInt8) :
-    ((b0 &&& 0x03) <<< 4) ||| (b1 >>> 4) < 64 := by bv_decide
-
-private theorem v1p_lt (b0 : UInt8) : (b0 &&& 0x03) <<< 4 < 64 := by bv_decide
-
-private theorem v2_lt (b1 b2 : UInt8) :
-    ((b1 &&& 0x0F) <<< 2) ||| (b2 >>> 6) < 64 := by bv_decide
-
-private theorem v2p_lt (b1 : UInt8) : (b1 &&& 0x0F) <<< 2 < 64 := by bv_decide
-
-private theorem v3_lt (b2 : UInt8) : b2 &&& 0x3F < 64 := by bv_decide
 
 /-- Round-trip: strictly decoding an encoding yields the original bytes. -/
 theorem decodeList_encodeList (α : Alphabet 64) : ∀ bs : List UInt8,
@@ -378,16 +645,17 @@ theorem encodeList_decodeList (α : Alphabet 64) : ∀ {cs : List Char} {bs : Li
 
 /-- Round-trip, lifted to `ByteArray`/`String`. -/
 theorem decode?_encode (data : ByteArray) : decode? (encode data) = some data := by
-  simp only [decode?, encode, String.toList_ofList, decodeList_encodeList,
-    Option.map_some, ByteArray.mk_toList_toArray]
+  simp only [decode?_eq_model, encode_eq_model, String.toList_ofList,
+    decodeList_encodeList, Option.map_some, ByteArray.mk_toList_toArray]
 
 /-- Canonicity, lifted to `ByteArray`/`String`. -/
 theorem encode_decode? {s : String} {data : ByteArray}
     (h : decode? s = some data) : encode data = s := by
-  simp only [decode?, Option.map_eq_some_iff] at h
+  rw [decode?_eq_model] at h
+  simp only [Option.map_eq_some_iff] at h
   obtain ⟨l, hl, hdata⟩ := h
   subst hdata
-  simp only [encode, ByteArray.toList_mk]
+  simp only [encode_eq_model, ByteArray.toList_mk]
   rw [encodeList_decodeList alphabet hl, String.ofList_toList]
 
 end RoundTrip
@@ -532,14 +800,47 @@ def alphabet : Alphabet 64 where
   toChar_ne_pad := toChar_ne_pad
   ofChar?_eq_some := ofChar?_eq_some
 
+section Ascii
+
+set_option maxRecDepth 4096
+
+private theorem alphabet_ascii : ∀ v : UInt8, v < 64 →
+    (alphabet.toChar v).utf8Size = 1 :=
+  uint8_all (by decide)
+
+end Ascii
+
+/-- The §5 alphabet table, computed once at initialization. -/
+private def urlTable : ByteArray := mkTable alphabet
+
 /-- Encode a byte array as a base64url string (RFC 4648 §5, with padding). -/
 def encode (data : ByteArray) : String :=
-  String.ofList (encodeList alphabet data.toList)
+  String.ofByteArray
+    (encodeGo urlTable data 0 (ByteArray.emptyWithCapacity (4 * ((data.size + 2) / 3))))
+    (by
+      show (encodeGo (mkTable alphabet) data 0 _).IsValidUTF8
+      rw [emptyWithCapacity_eq, encodeGo_empty alphabet alphabet_ascii]
+      exact (String.ofList (encodeList alphabet data.toList)).isValidUTF8)
 
 /-- Strictly decode a base64url string. Returns `none` if the input is not
 a canonical RFC 4648 §5 encoding (including if padding is omitted). -/
 def decode? (s : String) : Option ByteArray :=
-  (decodeList alphabet s.toList).map fun bytes => ByteArray.mk bytes.toArray
+  decodeGo alphabet s.toList ByteArray.empty
+
+/-- `encode` computes exactly the specification `encodeList`; encoder
+theorems transfer through this equality. -/
+theorem encode_eq_model (data : ByteArray) :
+    encode data = String.ofList (encodeList alphabet data.toList) := by
+  rw [← String.toByteArray_inj]
+  show encodeGo (mkTable alphabet) data 0 (ByteArray.emptyWithCapacity _) = _
+  rw [emptyWithCapacity_eq]
+  exact encodeGo_empty alphabet alphabet_ascii data
+
+/-- `decode?` computes exactly the specification `decodeList`; decoder
+theorems transfer through this equality. -/
+theorem decode?_eq_model (s : String) :
+    decode? s = (decodeList alphabet s.toList).map fun bytes => ByteArray.mk bytes.toArray :=
+  decodeGo_empty alphabet s
 
 #guard encode "".toUTF8 = ""
 #guard encode "fooba".toUTF8 = "Zm9vYmE="
@@ -557,16 +858,17 @@ def decode? (s : String) : Option ByteArray :=
 
 /-- Round-trip, lifted to `ByteArray`/`String`. -/
 theorem decode?_encode (data : ByteArray) : decode? (encode data) = some data := by
-  simp only [decode?, encode, String.toList_ofList, decodeList_encodeList,
-    Option.map_some, ByteArray.mk_toList_toArray]
+  simp only [decode?_eq_model, encode_eq_model, String.toList_ofList,
+    decodeList_encodeList, Option.map_some, ByteArray.mk_toList_toArray]
 
 /-- Canonicity, lifted to `ByteArray`/`String`. -/
 theorem encode_decode? {s : String} {data : ByteArray}
     (h : decode? s = some data) : encode data = s := by
-  simp only [decode?, Option.map_eq_some_iff] at h
+  rw [decode?_eq_model] at h
+  simp only [Option.map_eq_some_iff] at h
   obtain ⟨l, hl, hdata⟩ := h
   subst hdata
-  simp only [encode, ByteArray.toList_mk]
+  simp only [encode_eq_model, ByteArray.toList_mk]
   rw [encodeList_decodeList alphabet hl, String.ofList_toList]
 
 end Url

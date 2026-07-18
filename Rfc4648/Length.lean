@@ -38,7 +38,7 @@ theorem length_of_decodeList {α : Alphabet 16} {cs : List Char} {bs : List UInt
 
 /-- Encoding length, lifted to `ByteArray`/`String`. -/
 theorem length_encode (data : ByteArray) : (encode data).length = 2 * data.size := by
-  rw [encode, String.length_ofList, length_encodeList, ByteArray.length_toList]
+  rw [encode_eq_model, String.length_ofList, length_encodeList, ByteArray.length_toList]
 
 /-- Decoding length, lifted to `ByteArray`/`String`. -/
 theorem length_of_decode? {s : String} {data : ByteArray}
@@ -78,7 +78,7 @@ theorem length_of_decodeList_mod {α : Alphabet 32} {cs : List Char} {bs : List 
 /-- Encoding length, lifted to `ByteArray`/`String`. -/
 theorem length_encode (data : ByteArray) :
     (encode data).length = 8 * ((data.size + 4) / 5) := by
-  rw [encode, String.length_ofList, length_encodeList, ByteArray.length_toList]
+  rw [encode_eq_model, String.length_ofList, length_encodeList, ByteArray.length_toList]
 
 /-- Decoding length, lifted to `ByteArray`/`String`. -/
 theorem length_of_decode? {s : String} {data : ByteArray}
@@ -90,7 +90,7 @@ namespace Hex
 /-- Encoding length, lifted to `ByteArray`/`String`. -/
 theorem length_encode (data : ByteArray) :
     (encode data).length = 8 * ((data.size + 4) / 5) := by
-  rw [encode, String.length_ofList, length_encodeList, ByteArray.length_toList]
+  rw [encode_eq_model, String.length_ofList, length_encodeList, ByteArray.length_toList]
 
 /-- Decoding length, lifted to `ByteArray`/`String`. -/
 theorem length_of_decode? {s : String} {data : ByteArray}
@@ -130,7 +130,7 @@ theorem length_of_decodeList_mod {α : Alphabet 64} {cs : List Char} {bs : List 
 /-- Encoding length, lifted to `ByteArray`/`String`. -/
 theorem length_encode (data : ByteArray) :
     (encode data).length = 4 * ((data.size + 2) / 3) := by
-  rw [encode, String.length_ofList, length_encodeList, ByteArray.length_toList]
+  rw [encode_eq_model, String.length_ofList, length_encodeList, ByteArray.length_toList]
 
 /-- Decoding length, lifted to `ByteArray`/`String`. -/
 theorem length_of_decode? {s : String} {data : ByteArray}
@@ -142,7 +142,7 @@ namespace Url
 /-- Encoding length, lifted to `ByteArray`/`String`. -/
 theorem length_encode (data : ByteArray) :
     (encode data).length = 4 * ((data.size + 2) / 3) := by
-  rw [encode, String.length_ofList, length_encodeList, ByteArray.length_toList]
+  rw [encode_eq_model, String.length_ofList, length_encodeList, ByteArray.length_toList]
 
 /-- Decoding length, lifted to `ByteArray`/`String`. -/
 theorem length_of_decode? {s : String} {data : ByteArray}

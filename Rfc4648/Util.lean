@@ -65,4 +65,53 @@ theorem ByteArray.size_mk_toArray (l : List UInt8) :
     (ByteArray.mk l.toArray).size = l.length := by
   rw [← ByteArray.length_toList, ByteArray.toList_mk]
 
+/-! ## Implementation-equivalence helpers
+
+Extensionality and `ByteArray`/`String` glue shared by the proofs that
+the byte-level codec implementations equal their list-model
+specifications. -/
+
+theorem str_ext {a b : String} (h : a.toList = b.toList) : a = b := by
+  have hab := congrArg String.ofList h
+  rwa [String.ofList_toList, String.ofList_toList] at hab
+
+theorem bext {a b : ByteArray} (h : a.data = b.data) : a = b := by
+  cases a
+  cases b
+  simp only at h
+  rw [h]
+
+theorem toList_getElem (data : ByteArray) (j : Nat) (h : j < data.size) :
+    data.toList[j]'(by rw [ByteArray.length_toList]; exact h) = data[j] := by
+  cases data with
+  | mk arr => simp [ByteArray.toList_eq_data_toList]; rfl
+
+theorem drop_cons (data : ByteArray) (i : Nat) (h : i < data.size) :
+    data.toList.drop i = data[i] :: data.toList.drop (i + 1) := by
+  rw [List.drop_eq_getElem_cons (by rw [ByteArray.length_toList]; exact h),
+    toList_getElem data i h]
+
+theorem drop_of_size_le (data : ByteArray) (i : Nat) (h : data.size ≤ i) :
+    data.toList.drop i = [] :=
+  List.drop_eq_nil_of_le (by rw [ByteArray.length_toList]; exact h)
+
+theorem get!_eq (b : ByteArray) (i : Nat) : b.get! i = b.data[i]! := by
+  cases b
+  rfl
+
+theorem toByteArray_push_ascii (s : String) (c : Char) (hc : c.utf8Size = 1) :
+    (s.push c).toByteArray = s.toByteArray.push c.val.toUInt8 := by
+  rw [String.toByteArray_push, List.utf8Encode_singleton,
+    String.utf8EncodeChar_eq_singleton hc]
+  generalize s.toByteArray = b
+  cases b
+  apply bext
+  refine Array.toList_inj.mp ?_
+  simp [-Array.toList_inj, ByteArray.push]
+
+theorem emptyWithCapacity_eq (c : Nat) :
+    ByteArray.emptyWithCapacity c = ByteArray.empty := by
+  apply bext
+  rfl
+
 end Rfc4648

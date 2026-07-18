@@ -31,9 +31,12 @@ open Rfc4648
 #eval Base64.decode? "aGk"                     -- none (missing padding)
 ```
 
-The core logic lives in `encodeList : List UInt8 → List Char` and
+The specification lives in `encodeList : List UInt8 → List Char` and
 `decodeList : List Char → Option (List UInt8)`, defined by structural
-recursion over encoding groups; `encode`/`decode?` are thin wrappers.
+recursion over encoding groups; `encode`/`decode?` are byte-level,
+allocation-free implementations proved equal to it (see each codec's
+`encode_eq_model`/`decode?_eq_model`), so every theorem about the
+specification carries over to them.
 
 `decode?` is **strict** (RFC 4648 §3.5, §12): it accepts exactly the
 canonical encodings. Inputs with non-alphabet characters (including
@@ -99,8 +102,8 @@ bench/run.sh        # base64 throughput vs. mainstream languages (see Benchmark)
 implementations in other languages over the same workload — random inputs
 from 16 B to 1 MiB, per direction, best of five trials with one warmup:
 
-- **Lean (this project)** — the verified `Base64.encode` / `decode?`, i.e.
-  the byte-level fast path (`Rfc4648/Fast.lean`) installed by `@[csimp]`
+- **Lean (this project)** — the verified `Base64.encode` / `decode?`,
+  defined directly as the byte-level fast path
   (`bench/LeanBase64.lean`, run compiled via `lake exe bench`);
 - **Python** `base64` (stdlib, C-backed), **Node** `Buffer` (native),
   **Go** `encoding/base64` (stdlib), **C** via OpenSSL `libcrypto`
@@ -116,13 +119,14 @@ bench/run.sh            # full comparison (~1–2 min; builds the Rust crate fir
 bench/run.sh --no-lean  # skip the Lean build/run
 ```
 
-The verified fast path is a byte-level encoder that reads 3-byte groups
+`Base64.encode` is a byte-level encoder that reads 3-byte groups
 straight from the input, looks characters up in a precomputed table,
 pushes raw bytes into an exactly-sized buffer, and wraps the result with
 the *unchecked* `String` constructor — its `IsValidUTF8` obligation is
 discharged by the proof that the output equals the list model's, so the
-validation the runtime would do is replaced by a theorem, and the
-`@[csimp]` swap itself is justified by proof, not trust.
+validation the runtime would do is replaced by a theorem, and every
+theorem stated against the specification transfers through the
+machine-checked equality `encode_eq_model`.
 
 Representative single-core throughput at 1 MiB (MiB/s; higher is better,
 numbers swing ±10% run to run):
@@ -140,11 +144,10 @@ The verified encoder lands in the same order of magnitude as the
 scalar/stdlib field — ahead of Go, behind Python's C core — while the
 SIMD-accelerated Rust crate and OpenSSL run ~7–10× faster still. The
 decoder is the outlier: at ~27 MiB/s it trails every one of these by
-50–80×, because `decodeFast?` still walks a `List Char` calling `ofChar?`
+50–80×, because `decode?` still walks a `List Char` calling `ofChar?`
 per character where the others read bytes through a lookup table. That
-gap is the concrete payoff waiting for a byte-level, `@[csimp]`-installed
-decoder proved equal to `decodeList`, the same treatment the encoder
-already got.
+gap is the concrete payoff waiting for a byte-level decoder proved equal
+to `decodeList`, the same treatment the encoder already got.
 
 Toolchain: `leanprover/lean4:v4.31.0` (see `lean-toolchain`). CI runs
 `lake build` via [lean-action](https://github.com/leanprover/lean-action).
