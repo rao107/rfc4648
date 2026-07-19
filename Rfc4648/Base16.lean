@@ -118,24 +118,7 @@ As in `Rfc4648.Base64`: the list-level codec is the specification only,
 and the implementations below are byte-level — the encoder writes
 precomputed UTF-8 bytes into a preallocated buffer, the decoder reads
 input bytes through the inverse table — each proved equal to the
-specification through character-level intermediate models. -/
-
-/-- Tail-recursive base16 encoder: reads bytes directly from `data`
-starting at `i`, pushing two characters each onto `acc`. Reference
-implementation for the byte-level encoder `encodeGoB`; its output being a
-`String` discharges the latter's UTF-8 validity obligation. -/
-private def encodeGo (α : Alphabet 16) (data : ByteArray) (i : Nat) (acc : String) : String :=
-  if h : i < data.size then
-    encodeGo α data (i + 1) <| (acc.push
-      (α.toChar (data[i] >>> 4))).push
-      (α.toChar (data[i] &&& 0x0F))
-  else acc
-termination_by data.size - i
-
-/-- String-level base16 encoder without intermediate lists. Equal to
-`String.ofList (encodeList α data.toList)` by `encodeFast_eq_model`. -/
-private def encodeFast (α : Alphabet 16) (data : ByteArray) : String :=
-  encodeGo α data 0 ""
+specification. -/
 
 /-- Character-level base16 decoder: consumes character pairs, pushing
 decoded bytes onto `acc`. Intermediate model between the specification
@@ -151,25 +134,6 @@ private def decodeGo (α : Alphabet 16) : List Char → ByteArray → Option Byt
 /-! ### Equivalence with the list model -/
 
 section Model
-
-private theorem encodeGo_eq (α : Alphabet 16) (data : ByteArray) (i : Nat) (acc : String) :
-    encodeGo α data i acc = acc ++ String.ofList (encodeList α (data.toList.drop i)) := by
-  fun_induction encodeGo α data i acc with
-  | case1 i acc h ih =>
-    rw [ih, drop_cons data i h]
-    apply str_ext
-    simp [String.toList_append, String.toList_push, encodeList]
-  | case2 i acc h =>
-    rw [drop_of_size_le data i (by omega)]
-    apply str_ext
-    simp [encodeList]
-
-/-- The string-level encoder computes exactly the model encoding. -/
-private theorem encodeFast_eq_model (α : Alphabet 16) (data : ByteArray) :
-    encodeFast α data = String.ofList (encodeList α data.toList) := by
-  rw [encodeFast, encodeGo_eq]
-  apply str_ext
-  simp
 
 private theorem decodeGo_eq (α : Alphabet 16) : ∀ (cs : List Char) (acc : ByteArray),
     decodeGo α cs acc = (decodeList α cs).map fun l => ⟨acc.data ++ l.toArray⟩
@@ -298,17 +262,20 @@ end ByteDecoder
 Same shape as base64's: the alphabet's 16 UTF-8 bytes are precomputed in
 a table, raw bytes are pushed onto a `ByteArray`, and the result is
 wrapped as a `String` via the *unchecked* runtime constructor, with the
-`IsValidUTF8` obligation discharged by the equality with `encodeGo`. -/
+`IsValidUTF8` obligation discharged by the proof that the bytes equal
+the UTF-8 encoding of the specification's output. -/
 
 /-- The alphabet's characters as their single UTF-8 bytes. -/
 private def mkTable (α : Alphabet 16) : ByteArray :=
   (List.ofFn fun i : Fin 16 => (α.toChar (UInt8.ofNat i.val)).val.toUInt8).toByteArray
 
-/-- Byte-level base16 encoder over a precomputed alphabet table. -/
-private def encodeGoB (tbl : ByteArray) (data : ByteArray) (i : Nat) (acc : ByteArray) :
+/-- Byte-level base16 encoder over a precomputed alphabet table:
+reads bytes directly from `data` starting at `i`, pushing the
+alphabet's UTF-8 bytes from `tbl` onto `acc`. -/
+private def encodeGo (tbl : ByteArray) (data : ByteArray) (i : Nat) (acc : ByteArray) :
     ByteArray :=
   if h : i < data.size then
-    encodeGoB tbl data (i + 1) <| (acc.push
+    encodeGo tbl data (i + 1) <| (acc.push
       (tbl.get! (data[i] >>> 4).toNat)).push
       (tbl.get! (data[i] &&& 0x0F).toNat)
   else acc
@@ -322,15 +289,21 @@ private theorem mkTable_get! (α : Alphabet 16) {v : UInt8} (hv : v < 16) :
   unfold mkTable
   rw [get!_ofFn_toByteArray _ h, UInt8.ofNat_toNat]
 
-private theorem encodeGoB_eq (α : Alphabet 16)
+/-- The encoder computes the UTF-8 bytes of the specification's output:
+if the accumulator holds the bytes of the string `sacc`, running the loop
+from `i` yields the bytes of `sacc` followed by the encoding of the
+remaining input. In particular the output is valid UTF-8. -/
+private theorem encodeGo_eq (α : Alphabet 16)
     (h : ∀ v : UInt8, v < 16 → (α.toChar v).utf8Size = 1) (data : ByteArray)
     (i : Nat) (acc : ByteArray) (sacc : String) (hacc : acc = sacc.toByteArray) :
-    encodeGoB (mkTable α) data i acc = (encodeGo α data i sacc).toByteArray := by
+    encodeGo (mkTable α) data i acc =
+      (sacc ++ String.ofList (encodeList α (data.toList.drop i))).toByteArray := by
   revert sacc hacc
-  fun_induction encodeGoB (mkTable α) data i acc with
+  fun_induction encodeGo (mkTable α) data i acc with
   | case1 i acc hlt ih =>
     intro sacc hacc
-    rw [encodeGo.eq_def, dif_pos hlt]
+    rw [drop_cons data i hlt]
+    simp only [encodeList, append_ofList_cons]
     refine ih _ ?_
     subst hacc
     rw [toByteArray_push_ascii _ _ (h _ (lo_lt _)),
@@ -338,35 +311,20 @@ private theorem encodeGoB_eq (α : Alphabet 16)
       mkTable_get! α (hi_lt _), mkTable_get! α (lo_lt _)]
   | case2 i acc hlt =>
     intro sacc hacc
-    rw [encodeGo.eq_def, dif_neg hlt]
+    rw [drop_of_size_le data i (Nat.le_of_not_lt hlt)]
+    simp only [encodeList, append_ofList_nil]
     exact hacc
 
+/-- The encoder loop started on an empty buffer computes exactly the
+UTF-8 bytes of the specification's output. -/
+private theorem encodeGo_empty (α : Alphabet 16)
+    (h : ∀ v : UInt8, v < 16 → (α.toChar v).utf8Size = 1) (data : ByteArray) :
+    encodeGo (mkTable α) data 0 ByteArray.empty =
+      (String.ofList (encodeList α data.toList)).toByteArray := by
+  rw [encodeGo_eq α h data 0 ByteArray.empty "" rfl]
+  exact congrArg String.toByteArray (str_ext (by simp))
+
 end ByteModel
-
-/-- Byte-level base16 encoder. The alphabet table is passed in (so
-callers can hoist it to a constant computed once), the output buffer is
-preallocated at the exact final size, and the `IsValidUTF8` obligation
-of the unchecked `String` constructor is discharged via the equality
-with the `String`-level encoder — no validation happens at runtime. -/
-private def encodeFaster (α : Alphabet 16)
-    (h : ∀ v : UInt8, v < 16 → (α.toChar v).utf8Size = 1)
-    (tbl : ByteArray) (htbl : tbl = mkTable α) (data : ByteArray) : String :=
-  String.ofByteArray
-    (encodeGoB tbl data 0 (ByteArray.emptyWithCapacity (2 * data.size)))
-    (by
-      rw [htbl, emptyWithCapacity_eq,
-        encodeGoB_eq α h data 0 ByteArray.empty "" rfl]
-      exact (encodeGo α data 0 "").isValidUTF8)
-
-/-- The byte-level encoder computes exactly the model encoding. -/
-private theorem encodeFaster_eq_model (α : Alphabet 16)
-    (h : ∀ v : UInt8, v < 16 → (α.toChar v).utf8Size = 1)
-    (tbl : ByteArray) (htbl : tbl = mkTable α) (data : ByteArray) :
-    encodeFaster α h tbl htbl data = String.ofList (encodeList α data.toList) := by
-  rw [← encodeFast_eq_model, ← String.toByteArray_inj]
-  show encodeGoB tbl data 0 _ = _
-  rw [htbl, emptyWithCapacity_eq]
-  exact encodeGoB_eq α h data 0 ByteArray.empty "" rfl
 
 /-! ## The user-facing codec -/
 
@@ -385,7 +343,12 @@ private def stdTable : ByteArray := mkTable alphabet
 
 /-- Encode a byte array as a base16 (hex) string (RFC 4648 §8). -/
 def encode (data : ByteArray) : String :=
-  encodeFaster alphabet alphabet_ascii stdTable rfl data
+  String.ofByteArray
+    (encodeGo stdTable data 0 (ByteArray.emptyWithCapacity (2 * data.size)))
+    (by
+      show (encodeGo (mkTable alphabet) data 0 _).IsValidUTF8
+      rw [emptyWithCapacity_eq, encodeGo_empty alphabet alphabet_ascii]
+      exact (String.ofList (encodeList alphabet data.toList)).isValidUTF8)
 
 /-- The §8 inverse table, computed once at initialization. -/
 private def stdDTable : ByteArray := mkDTable alphabet
@@ -398,8 +361,11 @@ def decode? (s : String) : Option ByteArray :=
 /-- `encode` computes exactly the specification `encodeList`; encoder
 theorems transfer through this equality. -/
 theorem encode_eq_model (data : ByteArray) :
-    encode data = String.ofList (encodeList alphabet data.toList) :=
-  encodeFaster_eq_model alphabet alphabet_ascii stdTable rfl data
+    encode data = String.ofList (encodeList alphabet data.toList) := by
+  rw [← String.toByteArray_inj]
+  show encodeGo (mkTable alphabet) data 0 (ByteArray.emptyWithCapacity _) = _
+  rw [emptyWithCapacity_eq]
+  exact encodeGo_empty alphabet alphabet_ascii data
 
 /-- `decode?` computes exactly the specification `decodeList`; decoder
 theorems transfer through this equality. -/

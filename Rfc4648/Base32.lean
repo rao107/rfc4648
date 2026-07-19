@@ -225,59 +225,7 @@ As in `Rfc4648.Base64`: the list-level codec is the specification only,
 and the implementations below are byte-level — the encoder writes
 precomputed UTF-8 bytes into a preallocated buffer, the decoder reads
 input bytes through the inverse table — each proved equal to the
-specification through character-level intermediate models. -/
-
-/-- Tail-recursive base32 encoder: reads 5-byte groups directly from
-`data` starting at `i`, pushing characters onto `acc`. Reference
-implementation for the byte-level encoder `encodeGoB`; its output being a
-`String` discharges the latter's UTF-8 validity obligation. -/
-private def encodeGo (α : Alphabet 32) (data : ByteArray) (i : Nat) (acc : String) : String :=
-  if h5 : i + 5 ≤ data.size then
-    encodeGo α data (i + 5) <| (((((((acc.push
-      (α.toChar (data[i]'(by omega) >>> 3))).push
-      (α.toChar (((data[i]'(by omega) &&& 0x07) <<< 2) ||| (data[i + 1]'(by omega) >>> 6)))).push
-      (α.toChar ((data[i + 1]'(by omega) >>> 1) &&& 0x1F))).push
-      (α.toChar (((data[i + 1]'(by omega) &&& 0x01) <<< 4) ||| (data[i + 2]'(by omega) >>> 4)))).push
-      (α.toChar (((data[i + 2]'(by omega) &&& 0x0F) <<< 1) ||| (data[i + 3]'(by omega) >>> 7)))).push
-      (α.toChar ((data[i + 3]'(by omega) >>> 2) &&& 0x1F))).push
-      (α.toChar (((data[i + 3]'(by omega) &&& 0x03) <<< 3) ||| (data[i + 4]'(by omega) >>> 5)))).push
-      (α.toChar (data[i + 4]'(by omega) &&& 0x1F))
-  else if h1 : data.size = i + 1 then
-    (((((((acc.push
-      (α.toChar (data[i]'(by omega) >>> 3))).push
-      (α.toChar ((data[i]'(by omega) &&& 0x07) <<< 2))).push
-      '=').push '=').push '=').push '=').push '=').push '='
-  else if h2 : data.size = i + 2 then
-    (((((((acc.push
-      (α.toChar (data[i]'(by omega) >>> 3))).push
-      (α.toChar (((data[i]'(by omega) &&& 0x07) <<< 2) ||| (data[i + 1]'(by omega) >>> 6)))).push
-      (α.toChar ((data[i + 1]'(by omega) >>> 1) &&& 0x1F))).push
-      (α.toChar ((data[i + 1]'(by omega) &&& 0x01) <<< 4))).push
-      '=').push '=').push '=').push '='
-  else if h3 : data.size = i + 3 then
-    (((((((acc.push
-      (α.toChar (data[i]'(by omega) >>> 3))).push
-      (α.toChar (((data[i]'(by omega) &&& 0x07) <<< 2) ||| (data[i + 1]'(by omega) >>> 6)))).push
-      (α.toChar ((data[i + 1]'(by omega) >>> 1) &&& 0x1F))).push
-      (α.toChar (((data[i + 1]'(by omega) &&& 0x01) <<< 4) ||| (data[i + 2]'(by omega) >>> 4)))).push
-      (α.toChar ((data[i + 2]'(by omega) &&& 0x0F) <<< 1))).push
-      '=').push '=').push '='
-  else if h4 : data.size = i + 4 then
-    (((((((acc.push
-      (α.toChar (data[i]'(by omega) >>> 3))).push
-      (α.toChar (((data[i]'(by omega) &&& 0x07) <<< 2) ||| (data[i + 1]'(by omega) >>> 6)))).push
-      (α.toChar ((data[i + 1]'(by omega) >>> 1) &&& 0x1F))).push
-      (α.toChar (((data[i + 1]'(by omega) &&& 0x01) <<< 4) ||| (data[i + 2]'(by omega) >>> 4)))).push
-      (α.toChar (((data[i + 2]'(by omega) &&& 0x0F) <<< 1) ||| (data[i + 3]'(by omega) >>> 7)))).push
-      (α.toChar ((data[i + 3]'(by omega) >>> 2) &&& 0x1F))).push
-      (α.toChar ((data[i + 3]'(by omega) &&& 0x03) <<< 3))).push '='
-  else acc
-termination_by data.size - i
-
-/-- String-level base32 encoder without intermediate lists. Equal to
-`String.ofList (encodeList α data.toList)` by `encodeFast_eq_model`. -/
-private def encodeFast (α : Alphabet 32) (data : ByteArray) : String :=
-  encodeGo α data 0 ""
+specification. -/
 
 /-- Character-level base32 decoder: consumes 8-character groups, pushing
 decoded bytes onto `acc`. Intermediate model between the specification
@@ -355,41 +303,6 @@ private theorem drop_five (data : ByteArray) (i : Nat) (h : i + 5 ≤ data.size)
       data[i]'(by omega) :: data[i + 1]'(by omega) :: data[i + 2]'(by omega) ::
         data[i + 3]'(by omega) :: data[i + 4]'(by omega) :: data.toList.drop (i + 5) := by
   rw [drop_four data i (by omega), drop_cons data (i + 4) (by omega)]
-
-private theorem encodeGo_eq (α : Alphabet 32) (data : ByteArray) (i : Nat) (acc : String) :
-    encodeGo α data i acc = acc ++ String.ofList (encodeList α (data.toList.drop i)) := by
-  fun_induction encodeGo α data i acc with
-  | case1 i acc h5 ih =>
-    rw [ih, drop_five data i (by omega)]
-    apply str_ext
-    simp [String.toList_append, String.toList_push, encodeList]
-  | case2 i acc h5 h1 =>
-    rw [drop_cons data i (by omega), drop_of_size_le data (i + 1) (by omega)]
-    apply str_ext
-    simp [String.toList_append, String.toList_push, encodeList]
-  | case3 i acc h5 h1 h2 =>
-    rw [drop_two data i (by omega), drop_of_size_le data (i + 2) (by omega)]
-    apply str_ext
-    simp [String.toList_append, String.toList_push, encodeList]
-  | case4 i acc h5 h1 h2 h3 =>
-    rw [drop_three data i (by omega), drop_of_size_le data (i + 3) (by omega)]
-    apply str_ext
-    simp [String.toList_append, String.toList_push, encodeList]
-  | case5 i acc h5 h1 h2 h3 h4 =>
-    rw [drop_four data i (by omega), drop_of_size_le data (i + 4) (by omega)]
-    apply str_ext
-    simp [String.toList_append, String.toList_push, encodeList]
-  | case6 i acc h5 h1 h2 h3 h4 =>
-    rw [drop_of_size_le data i (by omega)]
-    apply str_ext
-    simp [encodeList]
-
-/-- The string-level encoder computes exactly the model encoding. -/
-private theorem encodeFast_eq_model (α : Alphabet 32) (data : ByteArray) :
-    encodeFast α data = String.ofList (encodeList α data.toList) := by
-  rw [encodeFast, encodeGo_eq]
-  apply str_ext
-  simp
 
 private theorem decodeGo_eq (α : Alphabet 32) : ∀ (cs : List Char) (acc : ByteArray),
     decodeGo α cs acc = (decodeList α cs).map fun l => ⟨acc.data ++ l.toArray⟩
@@ -1149,17 +1062,20 @@ end ByteDecoder
 Same shape as base64's: the alphabet's 32 UTF-8 bytes are precomputed in
 a table, raw bytes are pushed onto a `ByteArray`, and the result is
 wrapped as a `String` via the *unchecked* runtime constructor, with the
-`IsValidUTF8` obligation discharged by the equality with `encodeGo`. -/
+`IsValidUTF8` obligation discharged by the proof that the bytes equal
+the UTF-8 encoding of the specification's output. -/
 
 /-- The alphabet's characters as their single UTF-8 bytes. -/
 private def mkTable (α : Alphabet 32) : ByteArray :=
   (List.ofFn fun i : Fin 32 => (α.toChar (UInt8.ofNat i.val)).val.toUInt8).toByteArray
 
-/-- Byte-level base32 encoder over a precomputed alphabet table. -/
-private def encodeGoB (tbl : ByteArray) (data : ByteArray) (i : Nat) (acc : ByteArray) :
+/-- Byte-level base32 encoder over a precomputed alphabet table:
+reads 5-byte groups directly from `data` starting at `i`, pushing the
+alphabet's UTF-8 bytes from `tbl` onto `acc`. -/
+private def encodeGo (tbl : ByteArray) (data : ByteArray) (i : Nat) (acc : ByteArray) :
     ByteArray :=
   if h5 : i + 5 ≤ data.size then
-    encodeGoB tbl data (i + 5) <| (((((((acc.push
+    encodeGo tbl data (i + 5) <| (((((((acc.push
       (tbl.get! (data[i]'(by omega) >>> 3).toNat)).push
       (tbl.get! (((data[i]'(by omega) &&& 0x07) <<< 2) ||| (data[i + 1]'(by omega) >>> 6)).toNat)).push
       (tbl.get! ((data[i + 1]'(by omega) >>> 1) &&& 0x1F).toNat)).push
@@ -1209,15 +1125,21 @@ private theorem mkTable_get! (α : Alphabet 32) {v : UInt8} (hv : v < 32) :
   unfold mkTable
   rw [get!_ofFn_toByteArray _ h, UInt8.ofNat_toNat]
 
-private theorem encodeGoB_eq (α : Alphabet 32)
+/-- The encoder computes the UTF-8 bytes of the specification's output:
+if the accumulator holds the bytes of the string `sacc`, running the loop
+from `i` yields the bytes of `sacc` followed by the encoding of the
+remaining input. In particular the output is valid UTF-8. -/
+private theorem encodeGo_eq (α : Alphabet 32)
     (h : ∀ v : UInt8, v < 32 → (α.toChar v).utf8Size = 1) (data : ByteArray)
     (i : Nat) (acc : ByteArray) (sacc : String) (hacc : acc = sacc.toByteArray) :
-    encodeGoB (mkTable α) data i acc = (encodeGo α data i sacc).toByteArray := by
+    encodeGo (mkTable α) data i acc =
+      (sacc ++ String.ofList (encodeList α (data.toList.drop i))).toByteArray := by
   revert sacc hacc
-  fun_induction encodeGoB (mkTable α) data i acc with
+  fun_induction encodeGo (mkTable α) data i acc with
   | case1 i acc h5 ih =>
     intro sacc hacc
-    rw [encodeGo.eq_def, dif_pos h5]
+    rw [drop_five data i (by omega)]
+    simp only [encodeList, append_ofList_cons]
     refine ih _ ?_
     subst hacc
     rw [toByteArray_push_ascii _ _ (h _ (w7_lt _)),
@@ -1234,7 +1156,8 @@ private theorem encodeGoB_eq (α : Alphabet 32)
       mkTable_get! α (w6_lt _ _), mkTable_get! α (w7_lt _)]
   | case2 i acc h5 h1 =>
     intro sacc hacc
-    rw [encodeGo.eq_def, dif_neg h5, dif_pos h1]
+    rw [drop_cons data i (by omega), drop_of_size_le data (i + 1) (by omega)]
+    simp only [encodeList, append_ofList_cons, append_ofList_nil]
     subst hacc
     rw [toByteArray_push_ascii _ _ (by decide : ('=' : Char).utf8Size = 1),
       toByteArray_push_ascii _ _ (by decide : ('=' : Char).utf8Size = 1),
@@ -1247,7 +1170,8 @@ private theorem encodeGoB_eq (α : Alphabet 32)
       mkTable_get! α (w0_lt _), mkTable_get! α (w1p_lt _)]
   | case3 i acc h5 h1 h2 =>
     intro sacc hacc
-    rw [encodeGo.eq_def, dif_neg h5, dif_neg h1, dif_pos h2]
+    rw [drop_two data i (by omega), drop_of_size_le data (i + 2) (by omega)]
+    simp only [encodeList, append_ofList_cons, append_ofList_nil]
     subst hacc
     rw [toByteArray_push_ascii _ _ (by decide : ('=' : Char).utf8Size = 1),
       toByteArray_push_ascii _ _ (by decide : ('=' : Char).utf8Size = 1),
@@ -1261,7 +1185,8 @@ private theorem encodeGoB_eq (α : Alphabet 32)
       mkTable_get! α (w2_lt _), mkTable_get! α (w3p_lt _)]
   | case4 i acc h5 h1 h2 h3 =>
     intro sacc hacc
-    rw [encodeGo.eq_def, dif_neg h5, dif_neg h1, dif_neg h2, dif_pos h3]
+    rw [drop_three data i (by omega), drop_of_size_le data (i + 3) (by omega)]
+    simp only [encodeList, append_ofList_cons, append_ofList_nil]
     subst hacc
     rw [toByteArray_push_ascii _ _ (by decide : ('=' : Char).utf8Size = 1),
       toByteArray_push_ascii _ _ (by decide : ('=' : Char).utf8Size = 1),
@@ -1276,7 +1201,8 @@ private theorem encodeGoB_eq (α : Alphabet 32)
       mkTable_get! α (w4p_lt _)]
   | case5 i acc h5 h1 h2 h3 h4 =>
     intro sacc hacc
-    rw [encodeGo.eq_def, dif_neg h5, dif_neg h1, dif_neg h2, dif_neg h3, dif_pos h4]
+    rw [drop_four data i (by omega), drop_of_size_le data (i + 4) (by omega)]
+    simp only [encodeList, append_ofList_cons, append_ofList_nil]
     subst hacc
     rw [toByteArray_push_ascii _ _ (by decide : ('=' : Char).utf8Size = 1),
       toByteArray_push_ascii _ _ (h _ (w6p_lt _)),
@@ -1292,35 +1218,20 @@ private theorem encodeGoB_eq (α : Alphabet 32)
       mkTable_get! α (w6p_lt _)]
   | case6 i acc h5 h1 h2 h3 h4 =>
     intro sacc hacc
-    rw [encodeGo.eq_def, dif_neg h5, dif_neg h1, dif_neg h2, dif_neg h3, dif_neg h4]
+    rw [drop_of_size_le data i (by omega)]
+    simp only [encodeList, append_ofList_nil]
     exact hacc
 
+/-- The encoder loop started on an empty buffer computes exactly the
+UTF-8 bytes of the specification's output. -/
+private theorem encodeGo_empty (α : Alphabet 32)
+    (h : ∀ v : UInt8, v < 32 → (α.toChar v).utf8Size = 1) (data : ByteArray) :
+    encodeGo (mkTable α) data 0 ByteArray.empty =
+      (String.ofList (encodeList α data.toList)).toByteArray := by
+  rw [encodeGo_eq α h data 0 ByteArray.empty "" rfl]
+  exact congrArg String.toByteArray (str_ext (by simp))
+
 end ByteModel
-
-/-- Byte-level base32 encoder. The alphabet table is passed in (so
-callers can hoist it to a constant computed once), the output buffer is
-preallocated at the exact final size, and the `IsValidUTF8` obligation
-of the unchecked `String` constructor is discharged via the equality
-with the `String`-level encoder — no validation happens at runtime. -/
-private def encodeFaster (α : Alphabet 32)
-    (h : ∀ v : UInt8, v < 32 → (α.toChar v).utf8Size = 1)
-    (tbl : ByteArray) (htbl : tbl = mkTable α) (data : ByteArray) : String :=
-  String.ofByteArray
-    (encodeGoB tbl data 0 (ByteArray.emptyWithCapacity (8 * ((data.size + 4) / 5))))
-    (by
-      rw [htbl, emptyWithCapacity_eq,
-        encodeGoB_eq α h data 0 ByteArray.empty "" rfl]
-      exact (encodeGo α data 0 "").isValidUTF8)
-
-/-- The byte-level encoder computes exactly the model encoding. -/
-private theorem encodeFaster_eq_model (α : Alphabet 32)
-    (h : ∀ v : UInt8, v < 32 → (α.toChar v).utf8Size = 1)
-    (tbl : ByteArray) (htbl : tbl = mkTable α) (data : ByteArray) :
-    encodeFaster α h tbl htbl data = String.ofList (encodeList α data.toList) := by
-  rw [← encodeFast_eq_model, ← String.toByteArray_inj]
-  show encodeGoB tbl data 0 _ = _
-  rw [htbl, emptyWithCapacity_eq]
-  exact encodeGoB_eq α h data 0 ByteArray.empty "" rfl
 
 /-! ## The user-facing codec -/
 
@@ -1339,7 +1250,12 @@ private def stdTable : ByteArray := mkTable alphabet
 
 /-- Encode a byte array as a base32 string (RFC 4648 §6, with padding). -/
 def encode (data : ByteArray) : String :=
-  encodeFaster alphabet alphabet_ascii stdTable rfl data
+  String.ofByteArray
+    (encodeGo stdTable data 0 (ByteArray.emptyWithCapacity (8 * ((data.size + 4) / 5))))
+    (by
+      show (encodeGo (mkTable alphabet) data 0 _).IsValidUTF8
+      rw [emptyWithCapacity_eq, encodeGo_empty alphabet alphabet_ascii]
+      exact (String.ofList (encodeList alphabet data.toList)).isValidUTF8)
 
 /-- The §6 inverse table, computed once at initialization. -/
 private def stdDTable : ByteArray := mkDTable alphabet
@@ -1352,8 +1268,11 @@ def decode? (s : String) : Option ByteArray :=
 /-- `encode` computes exactly the specification `encodeList`; encoder
 theorems transfer through this equality. -/
 theorem encode_eq_model (data : ByteArray) :
-    encode data = String.ofList (encodeList alphabet data.toList) :=
-  encodeFaster_eq_model alphabet alphabet_ascii stdTable rfl data
+    encode data = String.ofList (encodeList alphabet data.toList) := by
+  rw [← String.toByteArray_inj]
+  show encodeGo (mkTable alphabet) data 0 (ByteArray.emptyWithCapacity _) = _
+  rw [emptyWithCapacity_eq]
+  exact encodeGo_empty alphabet alphabet_ascii data
 
 /-- `decode?` computes exactly the specification `decodeList`; decoder
 theorems transfer through this equality. -/
@@ -1716,7 +1635,12 @@ private def hexTable : ByteArray := mkTable alphabet
 
 /-- Encode a byte array as a base32hex string (RFC 4648 §7, with padding). -/
 def encode (data : ByteArray) : String :=
-  encodeFaster alphabet alphabet_ascii hexTable rfl data
+  String.ofByteArray
+    (encodeGo hexTable data 0 (ByteArray.emptyWithCapacity (8 * ((data.size + 4) / 5))))
+    (by
+      show (encodeGo (mkTable alphabet) data 0 _).IsValidUTF8
+      rw [emptyWithCapacity_eq, encodeGo_empty alphabet alphabet_ascii]
+      exact (String.ofList (encodeList alphabet data.toList)).isValidUTF8)
 
 /-- The §7 inverse table, computed once at initialization. -/
 private def hexDTable : ByteArray := mkDTable alphabet
@@ -1729,8 +1653,11 @@ def decode? (s : String) : Option ByteArray :=
 /-- `encode` computes exactly the specification `encodeList`; encoder
 theorems transfer through this equality. -/
 theorem encode_eq_model (data : ByteArray) :
-    encode data = String.ofList (encodeList alphabet data.toList) :=
-  encodeFaster_eq_model alphabet alphabet_ascii hexTable rfl data
+    encode data = String.ofList (encodeList alphabet data.toList) := by
+  rw [← String.toByteArray_inj]
+  show encodeGo (mkTable alphabet) data 0 (ByteArray.emptyWithCapacity _) = _
+  rw [emptyWithCapacity_eq]
+  exact encodeGo_empty alphabet alphabet_ascii data
 
 /-- `decode?` computes exactly the specification `decodeList`; decoder
 theorems transfer through this equality. -/

@@ -73,10 +73,6 @@ theorem ByteArray.length_toList (bs : ByteArray) : bs.toList.length = bs.size :=
   rw [ByteArray.toList_eq_data_toList]
   exact Array.length_toList
 
-theorem ByteArray.size_mk_toArray (l : List UInt8) :
-    (ByteArray.mk l.toArray).size = l.length := by
-  rw [← ByteArray.length_toList, ByteArray.toList_mk]
-
 /-! ## Implementation-equivalence helpers
 
 Extensionality and `ByteArray`/`String` glue shared by the proofs that
@@ -86,6 +82,13 @@ specifications. -/
 theorem str_ext {a b : String} (h : a.toList = b.toList) : a = b := by
   have hab := congrArg String.ofList h
   rwa [String.ofList_toList, String.ofList_toList] at hab
+
+theorem append_ofList_cons (s : String) (c : Char) (cs : List Char) :
+    s ++ String.ofList (c :: cs) = (s.push c) ++ String.ofList cs :=
+  str_ext (by simp [String.toList_append, String.toList_push])
+
+theorem append_ofList_nil (s : String) : s ++ String.ofList [] = s :=
+  str_ext (by simp)
 
 theorem toList_getElem (data : ByteArray) (j : Nat) (h : j < data.size) :
     data.toList[j]'(by rw [ByteArray.length_toList]; exact h) = data[j] := by

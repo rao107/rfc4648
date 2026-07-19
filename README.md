@@ -144,7 +144,7 @@ every non-alphabet byte. It never decodes UTF-8 — the proof
 `decodeGoB_eq` shows accepted bytes are in one-to-one correspondence
 with the characters of the specification, which is what transfers the
 round-trip and canonicity theorems. This replaced a `List Char` walk
-that managed only ~25 MiB/s, a ~12× speedup.
+that managed only ~25 MiB/s, a ~13× speedup.
 
 Representative single-core throughput at 1 MiB (MiB/s; higher is better;
 numbers swing noticeably run to run with CPU frequency scaling, so treat
@@ -152,16 +152,16 @@ the ratios as indicative):
 
 | implementation | encode | decode |
 |---|--:|--:|
-| **Lean (this project)** | ~270 | ~300 |
+| **Lean (this project)** | ~330 | ~340 |
 | C — OpenSSL `libcrypto` | ~2600 | ~2270 |
-| Rust — `base64` 0.22 | ~3200 | ~2400 |
-| Go — `encoding/base64` | ~1140 | ~1370 |
-| Node — `Buffer` | ~2700 | ~3300 |
-| Python — `base64` | ~940 | ~1140 |
+| Rust — `base64` 0.22 | ~2760 | ~1950 |
+| Go — `encoding/base64` | ~1110 | ~1540 |
+| Node — `Buffer` | ~2600 | ~3300 |
+| Python — `base64` | ~960 | ~1160 |
 
 Both directions of the verified codec now land in the same order of
-magnitude as the scalar/stdlib field — within ~4–5× of Go and Python's
-C core — while OpenSSL and the SIMD-accelerated Rust crate run ~8–12×
+magnitude as the scalar/stdlib field — within ~3–5× of Go and Python's
+C core — while OpenSSL and the SIMD-accelerated Rust crate run ~6–8×
 faster still. The remaining gap is per-byte `ByteArray.push` and
 `get!` bounds checks versus the word-at-a-time loops the C-family
 implementations use.

@@ -255,13 +255,6 @@ private theorem drop_three (data : ByteArray) (i : Nat) (h : i + 3 ≤ data.size
   rw [drop_cons data i (by omega), drop_cons data (i + 1) (by omega),
     drop_cons data (i + 1 + 1) (by omega)]
 
-private theorem append_ofList_cons (s : String) (c : Char) (cs : List Char) :
-    s ++ String.ofList (c :: cs) = (s.push c) ++ String.ofList cs :=
-  str_ext (by simp [String.toList_append, String.toList_push])
-
-private theorem append_ofList_nil (s : String) : s ++ String.ofList [] = s :=
-  str_ext (by simp)
-
 private theorem mkTable_get! (α : Alphabet 64) {v : UInt8} (hv : v < 64) :
     (mkTable α).get! v.toNat = (α.toChar v).val.toUInt8 := by
   have h : v.toNat < 64 := hv
