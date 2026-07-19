@@ -17,9 +17,12 @@ RFC 4648 §12 security considerations on canonical encodings.
 
 The specification `encodeList` / `decodeList` operates on `List UInt8` /
 `List Char`; all theorems are proved against it. The user-facing `encode`
-and `decode?` are allocation-free implementations over `ByteArray` and
-`String`, each proved equal to the specification (`encode_eq_model`,
-`decode?_eq_model`), so every theorem transfers to them.
+and `decode?` are byte-level implementations over `ByteArray` and
+`String` — the encoder writes table-driven UTF-8 bytes into a
+preallocated buffer, the decoder reads the string's UTF-8 bytes through
+a 256-entry inverse table — each proved equal to the specification
+(`encode_eq_model`, `decode?_eq_model`), so every theorem transfers to
+them.
 -/
 
 namespace Rfc4648.Base16
@@ -50,21 +53,24 @@ theorem ofChar?_toChar : ∀ v : UInt8, v < 16 → ofChar? (toChar v) = some v :
 theorem toChar_ne_pad : ∀ v : UInt8, v < 16 → toChar v ≠ '=' :=
   uint8_all (by decide)
 
+/-- The alphabet accepts only ASCII characters. -/
+theorem ofChar?_ascii {c : Char} {v : UInt8} (h : ofChar? c = some v) :
+    c.toNat < 128 := by
+  unfold ofChar? at h
+  split at h
+  case isTrue h' => have : c.toNat ≤ 57 := h'.2; omega
+  case isFalse =>
+    split at h
+    case isTrue h' => have : c.toNat ≤ 70 := h'.2; omega
+    case isFalse => simp at h
+
 theorem ofChar?_eq_some {c : Char} {v : UInt8} (h : ofChar? c = some v) :
     v < 16 ∧ toChar v = c := by
-  -- The accepted ranges are ASCII, so `c` is one of 128 characters and
-  -- the claim reduces to an exhaustive check.
-  have hc : c.toNat < 128 := by
-    unfold ofChar? at h
-    split at h
-    case isTrue h' => have : c.toNat ≤ 57 := h'.2; omega
-    case isFalse =>
-      split at h
-      case isTrue h' => have : c.toNat ≤ 70 := h'.2; omega
-      case isFalse => simp at h
+  -- The accepted characters are ASCII, so `c` is one of 128 characters
+  -- and the claim reduces to an exhaustive check.
   have hall := char_all_lt
     (P := fun c => ((ofChar? c).all fun v => v < 16 && toChar v == c) = true)
-    (by decide) c hc
+    (by decide) c (ofChar?_ascii h)
   rw [h] at hall
   simpa using hall
 
@@ -109,10 +115,10 @@ private theorem lo_lt (b : UInt8) : b &&& 0x0F < 16 := by bv_decide
 /-! ## The implementation
 
 As in `Rfc4648.Base64`: the list-level codec is the specification only,
-and the implementations below are allocation-free — the decoder pushes
-onto a `ByteArray` accumulator; the encoder writes precomputed UTF-8
-bytes into a preallocated buffer — each proved equal to the
-specification. -/
+and the implementations below are byte-level — the encoder writes
+precomputed UTF-8 bytes into a preallocated buffer, the decoder reads
+input bytes through the inverse table — each proved equal to the
+specification through character-level intermediate models. -/
 
 /-- Tail-recursive base16 encoder: reads bytes directly from `data`
 starting at `i`, pushing two characters each onto `acc`. Reference
@@ -131,8 +137,9 @@ termination_by data.size - i
 private def encodeFast (α : Alphabet 16) (data : ByteArray) : String :=
   encodeGo α data 0 ""
 
-/-- Tail-recursive base16 decoder: consumes character pairs, pushing
-decoded bytes onto `acc`. -/
+/-- Character-level base16 decoder: consumes character pairs, pushing
+decoded bytes onto `acc`. Intermediate model between the specification
+`decodeList` and the byte-level decoder `decodeGoB`. -/
 private def decodeGo (α : Alphabet 16) : List Char → ByteArray → Option ByteArray
   | [], acc => some acc
   | c0 :: c1 :: rest, acc => do
@@ -140,12 +147,6 @@ private def decodeGo (α : Alphabet 16) : List Char → ByteArray → Option Byt
     let v1 ← α.ofChar? c1
     decodeGo α rest (acc.push ((v0 <<< 4) ||| v1))
   | _, _ => none
-
-/-- Base16 decoder that accumulates into a `ByteArray` instead of
-building a `List UInt8`. Equal to the specification `decodeList` by
-`decodeFast?_eq_model`. -/
-private def decodeFast? (α : Alphabet 16) (s : String) : Option ByteArray :=
-  decodeGo α s.toList ByteArray.empty
 
 /-! ### Equivalence with the list model -/
 
@@ -191,10 +192,12 @@ private theorem decodeGo_eq (α : Alphabet 16) : ∀ (cs : List Char) (acc : Byt
           exact congrArg some (ByteArray.ext (by simp [ByteArray.data_push]))
   | [_], _ => by simp [decodeGo, decodeList]
 
-/-- The fast decoder computes exactly the model decoding. -/
-private theorem decodeFast?_eq_model (α : Alphabet 16) (s : String) :
-    decodeFast? α s = (decodeList α s.toList).map fun l => ByteArray.mk l.toArray := by
-  rw [decodeFast?, decodeGo_eq]
+/-- The character-level decoder started on an empty accumulator computes
+exactly the specification's decoding. -/
+private theorem decodeGo_empty (α : Alphabet 16) (s : String) :
+    decodeGo α s.toList ByteArray.empty =
+      (decodeList α s.toList).map fun l => ByteArray.mk l.toArray := by
+  rw [decodeGo_eq]
   cases decodeList α s.toList with
   | none => rfl
   | some l =>
@@ -202,6 +205,93 @@ private theorem decodeFast?_eq_model (α : Alphabet 16) (s : String) :
     exact congrArg some (ByteArray.ext (by simp [ByteArray.data_empty]))
 
 end Model
+
+/-! ### Byte-level decoder
+
+As in `Rfc4648.Base64`: `decodeGoB` reads the string's UTF-8 bytes
+directly through the 256-entry inverse table `mkDTable` (`0xFF` marks
+non-alphabet bytes) and never decodes UTF-8 — the step lemmas in
+`Rfc4648.Alphabet` show accepted bytes correspond one-to-one to the
+characters of the specification. -/
+
+/-- Tail-recursive byte-level base16 decoder: reads 2 input bytes per
+step from `bs` starting at `i`, looks their 4-bit values up in the
+inverse table `dtbl` (`0xFF` = reject), and pushes decoded bytes onto
+`acc`. -/
+private def decodeGoB (dtbl : ByteArray) (bs : ByteArray) (i : Nat) (acc : ByteArray) :
+    Option ByteArray :=
+  if h2 : i + 2 ≤ bs.size then
+    let v0 := dtbl.get! (bs[i]'(by omega)).toNat
+    let v1 := dtbl.get! (bs[i + 1]'(by omega)).toNat
+    if v0 = 0xFF ∨ v1 = 0xFF then none
+    else decodeGoB dtbl bs (i + 2) (acc.push ((v0 <<< 4) ||| v1))
+  else if i = bs.size then some acc else none
+termination_by bs.size - i
+
+section ByteDecoder
+
+variable {α : Alphabet 16}
+  (hascii : ∀ {c : Char} {v : UInt8}, α.ofChar? c = some v → c.toNat < 128)
+
+include hascii
+
+/-- The byte-level decoder computes the character-level decoder: if the
+bytes from position `i` on are the UTF-8 encoding of the characters `l`,
+the two agree. -/
+private theorem decodeGoB_eq :
+    ∀ (l : List Char) (bs : ByteArray) (i : Nat) (acc : ByteArray),
+      i ≤ bs.size → bs.toList.drop i = (l.utf8Encode).toList →
+      decodeGoB (mkDTable α) bs i acc = decodeGo α l acc
+  | [] => by
+    intro bs i acc hi hbs
+    have hie : i = bs.size := (drop_utf8_nil_iff hi hbs).mpr rfl
+    rw [decodeGoB.eq_def, dif_neg (by omega), if_pos hie]
+    rfl
+  | [c0] => by
+    intro bs i acc hi hbs
+    rw [show decodeGo α [c0] acc = none from by simp [decodeGo]]
+    · by_cases h2 : i + 2 ≤ bs.size
+      · rw [decodeGoB.eq_def, dif_pos h2]
+        cases hv0 : α.ofChar? c0 with
+        | some v0 =>
+          obtain ⟨h0, -, -, hbs1⟩ := step_some hascii hv0 hbs
+          have := (drop_utf8_nil_iff (j := i + 1) h0 hbs1).mpr rfl
+          exact absurd h2 (by omega)
+        | none =>
+          obtain ⟨h0, hlk0⟩ := step_none hascii hv0 hbs
+          simp [hlk0]
+      · have hne : i ≠ bs.size := fun h =>
+          absurd ((drop_utf8_nil_iff hi hbs).mp h) (by simp)
+        rw [decodeGoB.eq_def, dif_neg h2, if_neg hne]
+  | c0 :: c1 :: rest => by
+    intro bs i acc hi hbs
+    -- two characters are at least two bytes, so the two-byte branch runs
+    have hlen : i + 2 ≤ bs.size := by
+      have hl := congrArg List.length hbs
+      rw [List.length_drop, ByteArray.length_toList, ByteArray.length_toList] at hl
+      have hge := length_le_size_utf8Encode (c0 :: c1 :: rest)
+      simp only [List.length_cons] at hge
+      omega
+    rw [decodeGoB.eq_def, dif_pos hlen]
+    cases hv0 : α.ofChar? c0 with
+    | none =>
+      obtain ⟨h0, hlk0⟩ := step_none hascii hv0 hbs
+      simp [hlk0, decodeGo, hv0]
+    | some v0 =>
+      obtain ⟨h0, hlk0, -, hbs1⟩ := step_some hascii hv0 hbs
+      cases hv1 : α.ofChar? c1 with
+      | none =>
+        obtain ⟨h1, hlk1⟩ := step_none hascii hv1 hbs1
+        simp [hlk1, decodeGo, hv0, hv1]
+      | some v1 =>
+        obtain ⟨h1, hlk1, -, hbs2⟩ := step_some hascii hv1 hbs1
+        simp only [decodeGo, hv0, hv1, Option.bind_eq_bind, Option.bind_some,
+          hlk0, hlk1]
+        rw [if_neg (by
+          simp [ne_ff_of_some (α := α) hv0, ne_ff_of_some (α := α) hv1])]
+        exact decodeGoB_eq rest bs (i + 2) _ hlen hbs2
+
+end ByteDecoder
 
 /-! ### Byte-level encoder
 
@@ -297,10 +387,13 @@ private def stdTable : ByteArray := mkTable alphabet
 def encode (data : ByteArray) : String :=
   encodeFaster alphabet alphabet_ascii stdTable rfl data
 
+/-- The §8 inverse table, computed once at initialization. -/
+private def stdDTable : ByteArray := mkDTable alphabet
+
 /-- Strictly decode a base16 string. Returns `none` if the input is not a
 canonical RFC 4648 §8 encoding. -/
 def decode? (s : String) : Option ByteArray :=
-  decodeFast? alphabet s
+  decodeGoB stdDTable s.toByteArray 0 ByteArray.empty
 
 /-- `encode` computes exactly the specification `encodeList`; encoder
 theorems transfer through this equality. -/
@@ -311,8 +404,12 @@ theorem encode_eq_model (data : ByteArray) :
 /-- `decode?` computes exactly the specification `decodeList`; decoder
 theorems transfer through this equality. -/
 theorem decode?_eq_model (s : String) :
-    decode? s = (decodeList alphabet s.toList).map fun bytes => ByteArray.mk bytes.toArray :=
-  decodeFast?_eq_model alphabet s
+    decode? s = (decodeList alphabet s.toList).map fun bytes => ByteArray.mk bytes.toArray := by
+  show decodeGoB (mkDTable alphabet) s.toByteArray 0 ByteArray.empty = _
+  rw [decodeGoB_eq (α := alphabet) ofChar?_ascii s.toList s.toByteArray 0 ByteArray.empty
+    (Nat.zero_le _)
+    (by rw [List.drop_zero, ← String.toByteArray_ofList, String.ofList_toList])]
+  exact decodeGo_empty alphabet s
 
 /-! ## Test vectors (RFC 4648 §10), checked at compile time -/
 
@@ -338,6 +435,7 @@ theorem decode?_eq_model (s : String) :
 #guard (decode? "666f").isNone    -- lowercase is not canonical
 #guard (decode? "6G").isNone      -- character outside the alphabet
 #guard (decode? "66=").isNone     -- base16 has no padding
+#guard (decode? "6€").isNone      -- non-ASCII input is rejected
 
 /-! ## Round-trip and canonicity
 

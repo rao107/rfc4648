@@ -33,10 +33,11 @@ open Rfc4648
 
 The specification lives in `encodeList : List UInt8 → List Char` and
 `decodeList : List Char → Option (List UInt8)`, defined by structural
-recursion over encoding groups; `encode`/`decode?` are byte-level,
-allocation-free implementations proved equal to it (see each codec's
+recursion over encoding groups; `encode`/`decode?` are efficient
+implementations proved equal to it (see each codec's
 `encode_eq_model`/`decode?_eq_model`), so every theorem about the
-specification carries over to them.
+specification carries over to them. All encoders and decoders are
+byte-level and table-driven.
 
 `decode?` is **strict** (RFC 4648 §3.5, §12): it accepts exactly the
 canonical encodings. Inputs with non-alphabet characters (including
@@ -89,6 +90,13 @@ kernel-checked by plain `decide`.
 - The main theorems are structural inductions over encoding groups
   (3 bytes ↔ 4 chars for base64, 5 ↔ 8 for base32, 1 ↔ 2 for base16),
   with one branch per padding shape.
+- The byte-level decoders are proved equal to the character-level
+  specification with a little verified UTF-8 reasoning
+  (`Rfc4648/Util.lean`): an ASCII character is exactly its code point as
+  one byte, a non-ASCII character starts with a lead byte `≥ 0x80`, and
+  the 256-entry inverse table rejects every such byte — so accepted
+  bytes are in one-to-one correspondence with accepted characters, and
+  the decoder never has to decode UTF-8.
 
 ## Building
 
@@ -130,26 +138,33 @@ validation the runtime would do is replaced by a theorem, and every
 theorem stated against the specification transfers through the
 machine-checked equality `encode_eq_model`.
 
-Representative single-core throughput at 1 MiB (MiB/s; higher is better,
-numbers swing ±10% run to run):
+`Base64.decode?` got the mirror-image treatment: it reads the string's
+UTF-8 bytes directly through a 256-entry inverse table that rejects
+every non-alphabet byte. It never decodes UTF-8 — the proof
+`decodeGoB_eq` shows accepted bytes are in one-to-one correspondence
+with the characters of the specification, which is what transfers the
+round-trip and canonicity theorems. This replaced a `List Char` walk
+that managed only ~25 MiB/s, a ~12× speedup.
+
+Representative single-core throughput at 1 MiB (MiB/s; higher is better;
+numbers swing noticeably run to run with CPU frequency scaling, so treat
+the ratios as indicative):
 
 | implementation | encode | decode |
 |---|--:|--:|
-| **Lean (this project)** | ~290 | ~24 |
-| C — OpenSSL `libcrypto` | ~2400 | ~2100 |
+| **Lean (this project)** | ~270 | ~300 |
+| C — OpenSSL `libcrypto` | ~2600 | ~2270 |
 | Rust — `base64` 0.22 | ~3200 | ~2400 |
-| Go — `encoding/base64` | ~830 | ~1200 |
-| Node — `Buffer` | ~2700 | ~3100 |
-| Python — `base64` | ~1030 | ~1260 |
+| Go — `encoding/base64` | ~1140 | ~1370 |
+| Node — `Buffer` | ~2700 | ~3300 |
+| Python — `base64` | ~940 | ~1140 |
 
-The verified encoder lands in the same order of magnitude as the
-scalar/stdlib field — within ~3–4× of Go and Python's C core — while the
-SIMD-accelerated Rust crate and OpenSSL run ~8–11× faster still. The
-decoder is the outlier: at ~24 MiB/s it trails every one of these by
-50–100×, because `decode?` still walks a `List Char` calling `ofChar?`
-per character where the others read bytes through a lookup table. That
-gap is the concrete payoff waiting for a byte-level decoder proved equal
-to `decodeList`, the same treatment the encoder already got.
+Both directions of the verified codec now land in the same order of
+magnitude as the scalar/stdlib field — within ~4–5× of Go and Python's
+C core — while OpenSSL and the SIMD-accelerated Rust crate run ~8–12×
+faster still. The remaining gap is per-byte `ByteArray.push` and
+`get!` bounds checks versus the word-at-a-time loops the C-family
+implementations use.
 
 Toolchain: `leanprover/lean4:v4.31.0` (see `lean-toolchain`). CI runs
 `lake build` via [lean-action](https://github.com/leanprover/lean-action).

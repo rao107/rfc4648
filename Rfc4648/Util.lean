@@ -131,4 +131,152 @@ theorem emptyWithCapacity_eq (c : Nat) :
     ByteArray.emptyWithCapacity c = ByteArray.empty :=
   ByteArray.ext rfl
 
+/-! ## UTF-8 byte-level decoding glue
+
+The byte-level decoders read a string's UTF-8 bytes directly. These
+lemmas relate the byte at the current position to the character at the
+head of the remaining input: an ASCII character is exactly its code
+point as one byte, and a non-ASCII character starts with a lead byte
+`≥ 0x80`. Together with a 256-entry inverse table that rejects every
+byte `≥ 0x80`, a byte-level decoder can track its `List Char`
+specification without ever decoding UTF-8. -/
+
+theorem size_toByteArray (l : List UInt8) : l.toByteArray.size = l.length := by
+  show l.toByteArray.data.size = l.length
+  rw [← Array.length_toList, List.toList_data_toByteArray]
+
+theorem toList_toByteArray (l : List UInt8) : l.toByteArray.toList = l := by
+  rw [ByteArray.toList_eq_data_toList, List.toList_data_toByteArray]
+
+theorem toList_append (a b : ByteArray) : (a ++ b).toList = a.toList ++ b.toList := by
+  simp [ByteArray.toList_eq_data_toList]
+
+/-- `Char.ofNat` on a code point below the surrogate range. -/
+theorem char_toNat_ofNat {n : Nat} (h : n < 0xD800) : (Char.ofNat n).toNat = n := by
+  rw [Char.ofNat, dif_pos (Or.inl h)]
+  rfl
+
+/-- A character's code point as `Nat`, unfolded so `omega` can use it. -/
+private theorem toNat_val (c : Char) : c.val.toNat = c.toNat := rfl
+
+/-- ASCII characters occupy one UTF-8 byte. -/
+theorem utf8Size_eq_one {c : Char} (hc : c.toNat < 128) : c.utf8Size = 1 :=
+  Char.utf8Size_eq_one_iff.mpr (UInt32.le_iff_toNat_le.mpr (by
+    have := toNat_val c
+    have : (127 : UInt32).toNat = 127 := rfl
+    omega))
+
+/-- The single UTF-8 byte of an ASCII character is its code point. -/
+theorem toNat_val_toUInt8 {c : Char} (hc : c.toNat < 128) :
+    (c.val.toUInt8).toNat = c.toNat := by
+  rw [UInt32.toNat_toUInt8]
+  have := toNat_val c
+  omega
+
+/-- ASCII characters are determined by their UTF-8 byte. -/
+theorem ascii_byte_inj {c d : Char} (hc : c.toNat < 128) (hd : d.toNat < 128)
+    (h : c.val.toUInt8 = d.val.toUInt8) : c = d := by
+  have : c.toNat = d.toNat := by
+    rw [← toNat_val_toUInt8 hc, ← toNat_val_toUInt8 hd, h]
+  rw [← Char.ofNat_toNat c, ← Char.ofNat_toNat d, this]
+
+/-- Split off the head byte of the remaining input when the remaining
+bytes are known to start with an explicit byte list. -/
+theorem drop_utf8_head {b : UInt8} {t : List UInt8} {B : ByteArray}
+    {bs : ByteArray} {j : Nat}
+    (hbs : bs.toList.drop j = ((b :: t).toByteArray ++ B).toList) :
+    ∃ h : j < bs.size, bs[j]'h = b ∧
+      bs.toList.drop (j + 1) = t ++ B.toList := by
+  rw [toList_append, toList_toByteArray] at hbs
+  have hj : j < bs.size := by
+    rcases Nat.lt_or_ge j bs.size with h | h
+    · exact h
+    · rw [drop_of_size_le bs j h] at hbs
+      simp at hbs
+  rw [drop_cons bs j hj] at hbs
+  simp only [List.cons_append, List.cons.injEq] at hbs
+  exact ⟨hj, hbs.1, hbs.2⟩
+
+/-- One ASCII character at the head of the remaining input is exactly
+one byte, its code point; the input advances one byte per character. -/
+theorem drop_utf8_ascii {c : Char} (hc : c.toNat < 128) {l : List Char}
+    {bs : ByteArray} {j : Nat}
+    (hbs : bs.toList.drop j = ((c :: l).utf8Encode).toList) :
+    ∃ h : j < bs.size, bs[j]'h = c.val.toUInt8 ∧
+      bs.toList.drop (j + 1) = (l.utf8Encode).toList := by
+  rw [List.utf8Encode_cons, List.utf8Encode_singleton,
+    String.utf8EncodeChar_eq_singleton (utf8Size_eq_one hc)] at hbs
+  obtain ⟨h, hb, hrest⟩ := drop_utf8_head hbs
+  exact ⟨h, hb, by rw [hrest]; rfl⟩
+
+section LeadBytes
+
+set_option maxRecDepth 4096
+
+private theorem or_c0_high : ∀ x : UInt8, 128 ≤ (x &&& 0x1f ||| 0xc0).toNat :=
+  uint8_all (by decide)
+
+private theorem or_e0_high : ∀ x : UInt8, 128 ≤ (x &&& 0x0f ||| 0xe0).toNat :=
+  uint8_all (by decide)
+
+private theorem or_f0_high : ∀ x : UInt8, 128 ≤ (x &&& 0x07 ||| 0xf0).toNat :=
+  uint8_all (by decide)
+
+end LeadBytes
+
+/-- A non-ASCII character starts with a lead byte `≥ 0x80`, so a decoder
+that rejects such bytes rejects it without reading its full encoding. -/
+theorem drop_utf8_high {c : Char} (hc : 128 ≤ c.toNat) {l : List Char}
+    {bs : ByteArray} {j : Nat}
+    (hbs : bs.toList.drop j = ((c :: l).utf8Encode).toList) :
+    ∃ h : j < bs.size, 128 ≤ (bs[j]'h).toNat := by
+  rw [List.utf8Encode_cons, List.utf8Encode_singleton] at hbs
+  obtain h1 | h2 | h3 | h4 := Char.utf8Size_eq c
+  · have := UInt32.le_iff_toNat_le.mp (Char.utf8Size_eq_one_iff.mp h1)
+    have := toNat_val c
+    have : (127 : UInt32).toNat = 127 := rfl
+    omega
+  · rw [String.utf8EncodeChar_eq_cons_cons h2] at hbs
+    obtain ⟨h, hb, -⟩ := drop_utf8_head hbs
+    exact ⟨h, by rw [hb]; exact or_c0_high _⟩
+  · rw [String.utf8EncodeChar_eq_cons_cons_cons h3] at hbs
+    obtain ⟨h, hb, -⟩ := drop_utf8_head hbs
+    exact ⟨h, by rw [hb]; exact or_e0_high _⟩
+  · rw [String.utf8EncodeChar_eq_cons_cons_cons_cons h4] at hbs
+    obtain ⟨h, hb, -⟩ := drop_utf8_head hbs
+    exact ⟨h, by rw [hb]; exact or_f0_high _⟩
+
+/-- The remaining characters are exhausted exactly when the byte
+position has reached the end of the input. -/
+theorem drop_utf8_nil_iff {l : List Char} {bs : ByteArray} {j : Nat}
+    (hj : j ≤ bs.size)
+    (hbs : bs.toList.drop j = (l.utf8Encode).toList) : j = bs.size ↔ l = [] := by
+  constructor
+  · intro h
+    subst h
+    rw [drop_of_size_le bs _ Nat.le.refl] at hbs
+    refine List.utf8Encode_eq_empty.mp (ByteArray.ext ?_)
+    have : l.utf8Encode.data.toList = [] := by
+      rw [← ByteArray.toList_eq_data_toList, ← hbs]
+    simpa using this
+  · intro h
+    subst h
+    rw [List.utf8Encode_nil, ByteArray.toList_empty] at hbs
+    have := congrArg List.length hbs
+    rw [List.length_drop, ByteArray.length_toList] at this
+    simp at this
+    omega
+
+/-- Every character is at least one byte, so the remaining input has at
+least as many bytes as characters. -/
+theorem length_le_size_utf8Encode (l : List Char) : l.length ≤ (l.utf8Encode).size := by
+  induction l with
+  | nil => simp [List.utf8Encode_nil]
+  | cons c t ih =>
+    rw [List.utf8Encode_cons, ByteArray.size_append, List.utf8Encode_singleton,
+      size_toByteArray, String.length_utf8EncodeChar]
+    have := c.utf8Size_pos
+    simp only [List.length_cons]
+    omega
+
 end Rfc4648
