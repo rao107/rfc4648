@@ -168,3 +168,5 @@ implementations use.
 
 Toolchain: `leanprover/lean4:v4.31.0` (see `lean-toolchain`). CI runs
 `lake build` via [lean-action](https://github.com/leanprover/lean-action).
+
+> Open to contributions proving other statements about RFC 4648.
